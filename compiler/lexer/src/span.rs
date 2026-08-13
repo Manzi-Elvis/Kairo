@@ -1,0 +1,15 @@
+/// A location in source code, tracked as a byte offset plus line/column
+/// for diagnostics. Cheap to copy; every token carries one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Span {
+    pub start: usize,
+    pub end: usize,
+    pub line: usize,
+    pub column: usize,
+}
+
+impl Span {
+    pub fn new(start: usize, end: usize, line: usize, column: usize) -> Self {
+        Self { start, end, line, column }
+    }
+}
