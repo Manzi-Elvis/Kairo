@@ -1,23 +1,26 @@
-# Kairo v0.1 Lexical Grammar (Milestone Scope)
+---
 
-Scope: only what's needed for §95's hello-world program.
+# Kairo v0.2 additions: Int, Bool, arithmetic, comparison, if/else
 
-## Tokens
+## New tokens
+- Keywords: `if`, `else`, `true`, `false`
+- Int literals: `[0-9]+` (no floats, no negative literals yet — `-5` is unary-minus-free for now; deferred)
+- Operators: `-` `*` `/` `==` `!=` `<` `>` `<=` `>=`
 
-- Keywords: `fn`
-- Identifiers: `[a-zA-Z_][a-zA-Z0-9_]*`
-- String literals: `"..."` (no escapes yet — deferred)
-- Punctuation: `(` `)` `{` `}` `:=` `+`
-- Whitespace: space, tab, newline — skipped, newlines tracked for spans
-- Comments: `//` to end of line — skipped
-- EOF: explicit end-of-file token
+## New expression precedence (lowest to highest)
+1. equality: `==` `!=`
+2. comparison: `<` `>` `<=` `>=`
+3. term: `+` `-`
+4. factor: `*` `/`
+5. primary: literals, identifiers, calls
 
-## Explicitly deferred (not in v0.1)
-- Numeric literals
-- String escapes
-- All other operators (`-`, `*`, `/`, `==`, etc.)
-- All other keywords (`mut`, `if`, `match`, `async`, ...)
+## New statements
+- `if <expr> { ... }`
+- `if <expr> { ... } else { ... }`
 
-## Error cases v0.1 must handle
-- Unterminated string literal
-- Unrecognized character
+## Explicitly deferred
+- Parenthesized grouping expressions `(1 + 2) * 3`
+- `while` loops
+- Unary minus / not
+- Float literals
+- `else if` chains (must nest explicit `else { if ... }` for now)

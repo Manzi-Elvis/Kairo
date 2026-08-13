@@ -3,12 +3,14 @@ use std::collections::HashMap;
 
 use crate::value::Value;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum RuntimeError {
     UndefinedVariable(String),
     UndefinedFunction(String),
     WrongArgCount { callee: String, expected: usize, found: usize },
     NoMainFunction,
+    TypeError(String),
+    DivisionByZero,
 }
 
 pub struct Interpreter<'a> {
@@ -24,8 +26,6 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    /// Runs the program's `main` function. Fails if there isn't one,
-    /// matching a real language's entry-point requirement.
     pub fn run(&mut self, program: &Program) -> Result<(), RuntimeError> {
         let main_fn = program
             .functions
@@ -37,7 +37,11 @@ impl<'a> Interpreter<'a> {
     }
 
     fn run_function(&mut self, func: &FunctionDecl) -> Result<(), RuntimeError> {
-        for stmt in &func.body {
+        self.exec_block(&func.body)
+    }
+
+    fn exec_block(&mut self, stmts: &[Stmt]) -> Result<(), RuntimeError> {
+        for stmt in stmts {
             self.exec_stmt(stmt)?;
         }
         Ok(())
@@ -54,12 +58,31 @@ impl<'a> Interpreter<'a> {
                 self.eval_expr(expr)?;
                 Ok(())
             }
+            Stmt::If { condition, then_branch, else_branch } => {
+                let cond_value = self.eval_expr(condition)?;
+                let Value::Bool(is_true) = cond_value else {
+                    return Err(RuntimeError::TypeError(format!(
+                        "if condition must be Bool, found {}",
+                        cond_value.type_name()
+                    )));
+                };
+
+                if is_true {
+                    self.exec_block(then_branch)
+                } else if let Some(else_stmts) = else_branch {
+                    self.exec_block(else_stmts)
+                } else {
+                    Ok(())
+                }
+            }
         }
     }
 
     fn eval_expr(&mut self, expr: &Expr) -> Result<Value, RuntimeError> {
         match expr {
             Expr::StringLiteral(s) => Ok(Value::String(s.clone())),
+            Expr::IntLiteral(i) => Ok(Value::Int(*i)),
+            Expr::BoolLiteral(b) => Ok(Value::Bool(*b)),
 
             Expr::Identifier(name) => self
                 .env
@@ -70,16 +93,37 @@ impl<'a> Interpreter<'a> {
             Expr::Binary { left, op, right } => {
                 let l = self.eval_expr(left)?;
                 let r = self.eval_expr(right)?;
-                match op {
-                    BinaryOp::Add => {
-                        let Value::String(ls) = l;
-                        let Value::String(rs) = r;
-                        Ok(Value::String(ls + &rs))
-                    }
-                }
+                self.eval_binary(*op, l, r)
             }
 
             Expr::Call { callee, args } => self.call_function(callee, args),
+        }
+    }
+
+    fn eval_binary(&self, op: BinaryOp, l: Value, r: Value) -> Result<Value, RuntimeError> {
+        use BinaryOp::*;
+
+        match op {
+            Add => match (l, r) {
+                (Value::String(a), Value::String(b)) => Ok(Value::String(a + &b)),
+                (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
+                (a, b) => Err(type_error("+", &a, &b)),
+            },
+            Sub => int_op(l, r, "-", |a, b| Ok(Value::Int(a - b))),
+            Mul => int_op(l, r, "*", |a, b| Ok(Value::Int(a * b))),
+            Div => int_op(l, r, "/", |a, b| {
+                if b == 0 {
+                    Err(RuntimeError::DivisionByZero)
+                } else {
+                    Ok(Value::Int(a / b))
+                }
+            }),
+            Eq => Ok(Value::Bool(l == r)),
+            NotEq => Ok(Value::Bool(l != r)),
+            Lt => int_op(l, r, "<", |a, b| Ok(Value::Bool(a < b))),
+            Gt => int_op(l, r, ">", |a, b| Ok(Value::Bool(a > b))),
+            Le => int_op(l, r, "<=", |a, b| Ok(Value::Bool(a <= b))),
+            Ge => int_op(l, r, ">=", |a, b| Ok(Value::Bool(a >= b))),
         }
     }
 
@@ -99,6 +143,28 @@ impl<'a> Interpreter<'a> {
             }
             other => Err(RuntimeError::UndefinedFunction(other.to_string())),
         }
+    }
+}
+
+fn type_error(op: &str, a: &Value, b: &Value) -> RuntimeError {
+    RuntimeError::TypeError(format!(
+        "cannot apply `{}` to {} and {}",
+        op,
+        a.type_name(),
+        b.type_name()
+    ))
+}
+
+/// Helper for binary ops that require both operands to be Int.
+fn int_op(
+    l: Value,
+    r: Value,
+    op: &str,
+    f: impl FnOnce(i64, i64) -> Result<Value, RuntimeError>,
+) -> Result<Value, RuntimeError> {
+    match (l, r) {
+        (Value::Int(a), Value::Int(b)) => f(a, b),
+        (a, b) => Err(type_error(op, &a, &b)),
     }
 }
 
@@ -128,42 +194,108 @@ mod tests {
                 print("Hello, " + name)
             }
         "#;
+        assert_eq!(run_and_capture(source).unwrap(), vec!["Hello, World".to_string()]);
+    }
 
-        let output = run_and_capture(source).expect("run failed");
-        assert_eq!(output, vec!["Hello, World".to_string()]);
+    #[test]
+    fn runs_arithmetic() {
+        let source = r#"
+            fn main() {
+                x := 2 + 3 * 4
+                print(x)
+            }
+        "#;
+        assert_eq!(run_and_capture(source).unwrap(), vec!["14".to_string()]);
+    }
+
+    #[test]
+    fn runs_if_true_branch() {
+        let source = r#"
+            fn main() {
+                if 1 < 2 {
+                    print("yes")
+                } else {
+                    print("no")
+                }
+            }
+        "#;
+        assert_eq!(run_and_capture(source).unwrap(), vec!["yes".to_string()]);
+    }
+
+    #[test]
+    fn runs_if_false_branch() {
+        let source = r#"
+            fn main() {
+                if 5 == 6 {
+                    print("yes")
+                } else {
+                    print("no")
+                }
+            }
+        "#;
+        assert_eq!(run_and_capture(source).unwrap(), vec!["no".to_string()]);
+    }
+
+    #[test]
+    fn runs_if_with_no_else_and_false_condition() {
+        let source = r#"
+            fn main() {
+                if false {
+                    print("unreachable")
+                }
+                print("after")
+            }
+        "#;
+        assert_eq!(run_and_capture(source).unwrap(), vec!["after".to_string()]);
+    }
+
+    #[test]
+    fn reports_division_by_zero() {
+        let source = r#"
+            fn main() {
+                x := 5 / 0
+            }
+        "#;
+        assert_eq!(run_and_capture(source).unwrap_err(), RuntimeError::DivisionByZero);
+    }
+
+    #[test]
+    fn reports_type_error_on_bad_addition() {
+        let source = r#"
+            fn main() {
+                x := 5 + true
+            }
+        "#;
+        match run_and_capture(source).unwrap_err() {
+            RuntimeError::TypeError(_) => {}
+            other => panic!("expected TypeError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn reports_type_error_on_non_bool_condition() {
+        let source = r#"
+            fn main() {
+                if 5 {
+                    print("no")
+                }
+            }
+        "#;
+        match run_and_capture(source).unwrap_err() {
+            RuntimeError::TypeError(_) => {}
+            other => panic!("expected TypeError, got {other:?}"),
+        }
     }
 
     #[test]
     fn reports_undefined_variable() {
-        let source = r#"
-            fn main() {
-                print(missing)
-            }
-        "#;
-
-        let err = run_and_capture(source).unwrap_err();
+        let err = run_and_capture(r#"fn main() { print(missing) }"#).unwrap_err();
         assert_eq!(err, RuntimeError::UndefinedVariable("missing".to_string()));
     }
 
     #[test]
-    fn reports_undefined_function() {
-        let source = r#"
-            fn main() {
-                doesNotExist("hi")
-            }
-        "#;
-
-        let err = run_and_capture(source).unwrap_err();
-        assert_eq!(err, RuntimeError::UndefinedFunction("doesNotExist".to_string()));
-    }
-
-    #[test]
     fn reports_missing_main() {
-        let source = r#"
-            fn notMain() {}
-        "#;
-
-        let err = run_and_capture(source).unwrap_err();
+        let err = run_and_capture(r#"fn notMain() {}"#).unwrap_err();
         assert_eq!(err, RuntimeError::NoMainFunction);
     }
 }

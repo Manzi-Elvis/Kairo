@@ -43,6 +43,8 @@ impl Lexer {
 
             let kind = if ch.is_alphabetic() || ch == '_' {
                 self.lex_identifier_or_keyword()
+            } else if ch.is_ascii_digit() {
+                self.lex_number()
             } else if ch == '"' {
                 self.lex_string()?
             } else {
@@ -109,8 +111,26 @@ impl Lexer {
         }
         match ident.as_str() {
             "fn" => TokenKind::Fn,
+            "if" => TokenKind::If,
+            "else" => TokenKind::Else,
+            "true" => TokenKind::True,
+            "false" => TokenKind::False,
             _ => TokenKind::Identifier(ident),
         }
+    }
+
+    fn lex_number(&mut self) -> TokenKind {
+        let mut digits = String::new();
+        while let Some(c) = self.peek() {
+            if c.is_ascii_digit() {
+                digits.push(c);
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        // Safe: we only ever pushed ASCII digits, so this always parses.
+        TokenKind::IntLiteral(digits.parse().unwrap())
     }
 
     fn lex_string(&mut self) -> Result<TokenKind, LexError> {
@@ -151,6 +171,27 @@ impl Lexer {
             '{' => Ok(TokenKind::LBrace),
             '}' => Ok(TokenKind::RBrace),
             '+' => Ok(TokenKind::Plus),
+            '-' => Ok(TokenKind::Minus),
+            '*' => Ok(TokenKind::Star),
+            '/' => Ok(TokenKind::Slash),
+            '<' if self.peek() == Some('=') => {
+                self.advance();
+                Ok(TokenKind::LtEq)
+            }
+            '<' => Ok(TokenKind::Lt),
+            '>' if self.peek() == Some('=') => {
+                self.advance();
+                Ok(TokenKind::GtEq)
+            }
+            '>' => Ok(TokenKind::Gt),
+            '=' if self.peek() == Some('=') => {
+                self.advance();
+                Ok(TokenKind::EqEq)
+            }
+            '!' if self.peek() == Some('=') => {
+                self.advance();
+                Ok(TokenKind::NotEq)
+            }
             ':' if self.peek() == Some('=') => {
                 self.advance();
                 Ok(TokenKind::ColonEq)
@@ -250,5 +291,39 @@ mod tests {
         assert_eq!(tokens[0].span.end, 2);
         assert_eq!(tokens[0].span.line, 1);
         assert_eq!(tokens[0].span.column, 1);
+    }
+
+    #[test]
+    fn tokenizes_numbers_and_new_operators() {
+        let kinds = kinds("5 - 2 * 3 / 1 == 4 != 5 < 6 > 1 <= 2 >= 3 if else true false");
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::IntLiteral(5),
+                TokenKind::Minus,
+                TokenKind::IntLiteral(2),
+                TokenKind::Star,
+                TokenKind::IntLiteral(3),
+                TokenKind::Slash,
+                TokenKind::IntLiteral(1),
+                TokenKind::EqEq,
+                TokenKind::IntLiteral(4),
+                TokenKind::NotEq,
+                TokenKind::IntLiteral(5),
+                TokenKind::Lt,
+                TokenKind::IntLiteral(6),
+                TokenKind::Gt,
+                TokenKind::IntLiteral(1),
+                TokenKind::LtEq,
+                TokenKind::IntLiteral(2),
+                TokenKind::GtEq,
+                TokenKind::IntLiteral(3),
+                TokenKind::If,
+                TokenKind::Else,
+                TokenKind::True,
+                TokenKind::False,
+                TokenKind::Eof,
+            ]
+        );
     }
 }

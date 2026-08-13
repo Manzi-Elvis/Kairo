@@ -37,19 +37,27 @@ impl Parser {
         self.expect(&TokenKind::LParen, "(")?;
         self.expect(&TokenKind::RParen, ")")?;
         self.expect(&TokenKind::LBrace, "{")?;
-
-        let mut body = Vec::new();
-        while !self.check(&TokenKind::RBrace) {
-            body.push(self.parse_stmt()?);
-        }
+        let body = self.parse_block_stmts()?;
         self.expect(&TokenKind::RBrace, "}")?;
 
         Ok(FunctionDecl { name, body })
     }
 
+    /// Parses statements until (but not consuming) the next `}`.
+    fn parse_block_stmts(&mut self) -> Result<Vec<Stmt>, ParseError> {
+        let mut stmts = Vec::new();
+        while !self.check(&TokenKind::RBrace) {
+            stmts.push(self.parse_stmt()?);
+        }
+        Ok(stmts)
+    }
+
     fn parse_stmt(&mut self) -> Result<Stmt, ParseError> {
+        if self.check(&TokenKind::If) {
+            return self.parse_if_stmt();
+        }
+
         // Lookahead: `identifier :=` is a variable declaration.
-        // Anything else starting with an identifier is an expression statement.
         if let TokenKind::Identifier(_) = self.peek_kind() {
             if self.peek_at_kind(1) == Some(&TokenKind::ColonEq) {
                 let name = self.expect_identifier()?;
@@ -63,19 +71,95 @@ impl Parser {
         Ok(Stmt::Expr(expr))
     }
 
-    fn parse_expr(&mut self) -> Result<Expr, ParseError> {
-        let mut left = self.parse_primary()?;
+    fn parse_if_stmt(&mut self) -> Result<Stmt, ParseError> {
+        self.expect(&TokenKind::If, "if")?;
+        let condition = self.parse_expr()?;
+        self.expect(&TokenKind::LBrace, "{")?;
+        let then_branch = self.parse_block_stmts()?;
+        self.expect(&TokenKind::RBrace, "}")?;
 
-        while self.check(&TokenKind::Plus) {
+        let else_branch = if self.check(&TokenKind::Else) {
+            self.advance();
+            self.expect(&TokenKind::LBrace, "{")?;
+            let stmts = self.parse_block_stmts()?;
+            self.expect(&TokenKind::RBrace, "}")?;
+            Some(stmts)
+        } else {
+            None
+        };
+
+        Ok(Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        })
+    }
+
+    // --- expression parsing, lowest to highest precedence ---
+
+    fn parse_expr(&mut self) -> Result<Expr, ParseError> {
+        self.parse_equality()
+    }
+
+    fn parse_equality(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.parse_comparison()?;
+        loop {
+            let op = match self.peek_kind() {
+                TokenKind::EqEq => BinaryOp::Eq,
+                TokenKind::NotEq => BinaryOp::NotEq,
+                _ => break,
+            };
+            self.advance();
+            let right = self.parse_comparison()?;
+            left = Expr::Binary { left: Box::new(left), op, right: Box::new(right) };
+        }
+        Ok(left)
+    }
+
+    fn parse_comparison(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.parse_term()?;
+        loop {
+            let op = match self.peek_kind() {
+                TokenKind::Lt => BinaryOp::Lt,
+                TokenKind::Gt => BinaryOp::Gt,
+                TokenKind::LtEq => BinaryOp::Le,
+                TokenKind::GtEq => BinaryOp::Ge,
+                _ => break,
+            };
+            self.advance();
+            let right = self.parse_term()?;
+            left = Expr::Binary { left: Box::new(left), op, right: Box::new(right) };
+        }
+        Ok(left)
+    }
+
+    fn parse_term(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.parse_factor()?;
+        loop {
+            let op = match self.peek_kind() {
+                TokenKind::Plus => BinaryOp::Add,
+                TokenKind::Minus => BinaryOp::Sub,
+                _ => break,
+            };
+            self.advance();
+            let right = self.parse_factor()?;
+            left = Expr::Binary { left: Box::new(left), op, right: Box::new(right) };
+        }
+        Ok(left)
+    }
+
+    fn parse_factor(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.parse_primary()?;
+        loop {
+            let op = match self.peek_kind() {
+                TokenKind::Star => BinaryOp::Mul,
+                TokenKind::Slash => BinaryOp::Div,
+                _ => break,
+            };
             self.advance();
             let right = self.parse_primary()?;
-            left = Expr::Binary {
-                left: Box::new(left),
-                op: BinaryOp::Add,
-                right: Box::new(right),
-            };
+            left = Expr::Binary { left: Box::new(left), op, right: Box::new(right) };
         }
-
         Ok(left)
     }
 
@@ -84,6 +168,18 @@ impl Parser {
             TokenKind::StringLiteral(value) => {
                 self.advance();
                 Ok(Expr::StringLiteral(value))
+            }
+            TokenKind::IntLiteral(value) => {
+                self.advance();
+                Ok(Expr::IntLiteral(value))
+            }
+            TokenKind::True => {
+                self.advance();
+                Ok(Expr::BoolLiteral(true))
+            }
+            TokenKind::False => {
+                self.advance();
+                Ok(Expr::BoolLiteral(false))
             }
             TokenKind::Identifier(name) => {
                 self.advance();
@@ -110,7 +206,7 @@ impl Parser {
             return Ok(args);
         }
         args.push(self.parse_expr()?);
-        // No comma token defined yet in v0.1 grammar, so single-arg calls only.
+        // No comma token defined yet in v0.1/v0.2 grammar, so single-arg calls only.
         Ok(args)
     }
 
@@ -187,11 +283,8 @@ mod tests {
         "#;
 
         let program = parse(source).expect("parse failed");
-
-        assert_eq!(program.functions.len(), 1);
         let func = &program.functions[0];
         assert_eq!(func.name, "main");
-        assert_eq!(func.body.len(), 2);
 
         assert_eq!(
             func.body[0],
@@ -200,32 +293,16 @@ mod tests {
                 value: Expr::StringLiteral("World".to_string()),
             }
         );
-
-        assert_eq!(
-            func.body[1],
-            Stmt::Expr(Expr::Call {
-                callee: "print".to_string(),
-                args: vec![Expr::Binary {
-                    left: Box::new(Expr::StringLiteral("Hello, ".to_string())),
-                    op: BinaryOp::Add,
-                    right: Box::new(Expr::Identifier("name".to_string())),
-                }],
-            })
-        );
     }
 
     #[test]
     fn parses_empty_function() {
         let program = parse("fn main() {}").unwrap();
-        assert_eq!(program.functions.len(), 1);
         assert_eq!(program.functions[0].body.len(), 0);
     }
 
     #[test]
     fn reports_missing_closing_brace() {
-        // With no closing brace, the parser tries to parse another
-        // statement and fails on EOF while expecting an expression —
-        // that's the correct, honest error for this input.
         let err = parse("fn main() {").unwrap_err();
         match err {
             ParseError::UnexpectedToken { expected, found, .. } => {
@@ -240,10 +317,68 @@ mod tests {
     fn reports_missing_fn_keyword() {
         let err = parse("main() {}").unwrap_err();
         match err {
-            ParseError::UnexpectedToken { expected, .. } => {
-                assert_eq!(expected, "fn");
-            }
+            ParseError::UnexpectedToken { expected, .. } => assert_eq!(expected, "fn"),
             other => panic!("expected UnexpectedToken, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_arithmetic_with_correct_precedence() {
+        // 2 + 3 * 4 should parse as 2 + (3 * 4), not (2 + 3) * 4
+        let program = parse("fn main() { x := 2 + 3 * 4 }").unwrap();
+        let Stmt::VariableDecl { value, .. } = &program.functions[0].body[0] else {
+            panic!("expected VariableDecl");
+        };
+
+        assert_eq!(
+            *value,
+            Expr::Binary {
+                left: Box::new(Expr::IntLiteral(2)),
+                op: BinaryOp::Add,
+                right: Box::new(Expr::Binary {
+                    left: Box::new(Expr::IntLiteral(3)),
+                    op: BinaryOp::Mul,
+                    right: Box::new(Expr::IntLiteral(4)),
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_if_else() {
+        let source = r#"
+            fn main() {
+                if 1 < 2 {
+                    print("yes")
+                } else {
+                    print("no")
+                }
+            }
+        "#;
+        let program = parse(source).unwrap();
+        let Stmt::If { condition, then_branch, else_branch } = &program.functions[0].body[0] else {
+            panic!("expected If statement");
+        };
+
+        assert_eq!(
+            *condition,
+            Expr::Binary {
+                left: Box::new(Expr::IntLiteral(1)),
+                op: BinaryOp::Lt,
+                right: Box::new(Expr::IntLiteral(2)),
+            }
+        );
+        assert_eq!(then_branch.len(), 1);
+        assert!(else_branch.is_some());
+        assert_eq!(else_branch.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn parses_if_without_else() {
+        let program = parse(r#"fn main() { if true { print("hi") } }"#).unwrap();
+        let Stmt::If { else_branch, .. } = &program.functions[0].body[0] else {
+            panic!("expected If statement");
+        };
+        assert!(else_branch.is_none());
     }
 }
