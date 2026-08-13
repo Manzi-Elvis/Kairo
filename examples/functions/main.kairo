@@ -1,0 +1,17 @@
+fn add(a: Int, b: Int) -> Int {
+    return a + b
+}
+
+fn fib(n: Int) -> Int {
+    if n < 2 {
+        return n
+    }
+    return fib(n - 1) + fib(n - 2)
+}
+
+fn main() {
+    sum := add(2, 3)
+    print(sum)
+
+    print(fib(10))
+}

@@ -21,8 +21,17 @@ struct Binding {
     is_mutable: bool,
 }
 
+/// Signals whether a block finished normally or hit a `return`.
+/// Propagated up through nested if/while blocks until it reaches
+/// the function call boundary that started execution.
+enum ControlFlow {
+    Normal,
+    Return(Value),
+}
+
 pub struct Interpreter<'a> {
     env: HashMap<String, Binding>,
+    functions: HashMap<String, FunctionDecl>,
     print_sink: &'a mut dyn FnMut(&str),
 }
 
@@ -30,32 +39,37 @@ impl<'a> Interpreter<'a> {
     pub fn new(print_sink: &'a mut dyn FnMut(&str)) -> Self {
         Self {
             env: HashMap::new(),
+            functions: HashMap::new(),
             print_sink,
         }
     }
 
     pub fn run(&mut self, program: &Program) -> Result<(), RuntimeError> {
-        let main_fn = program
+        for func in &program.functions {
+            self.functions.insert(func.name.clone(), func.clone());
+        }
+
+        let main_fn = self
             .functions
-            .iter()
-            .find(|f| f.name == "main")
+            .get("main")
+            .cloned()
             .ok_or(RuntimeError::NoMainFunction)?;
 
-        self.run_function(main_fn)
-    }
-
-    fn run_function(&mut self, func: &FunctionDecl) -> Result<(), RuntimeError> {
-        self.exec_block(&func.body)
-    }
-
-    fn exec_block(&mut self, stmts: &[Stmt]) -> Result<(), RuntimeError> {
-        for stmt in stmts {
-            self.exec_stmt(stmt)?;
-        }
+        self.exec_block(&main_fn.body)?;
         Ok(())
     }
 
-    fn exec_stmt(&mut self, stmt: &Stmt) -> Result<(), RuntimeError> {
+    fn exec_block(&mut self, stmts: &[Stmt]) -> Result<ControlFlow, RuntimeError> {
+        for stmt in stmts {
+            let flow = self.exec_stmt(stmt)?;
+            if let ControlFlow::Return(_) = flow {
+                return Ok(flow);
+            }
+        }
+        Ok(ControlFlow::Normal)
+    }
+
+    fn exec_stmt(&mut self, stmt: &Stmt) -> Result<ControlFlow, RuntimeError> {
         match stmt {
             Stmt::VariableDecl { name, value, is_mutable } => {
                 if self.env.contains_key(name) {
@@ -66,7 +80,7 @@ impl<'a> Interpreter<'a> {
                     name.clone(),
                     Binding { value: v, is_mutable: *is_mutable },
                 );
-                Ok(())
+                Ok(ControlFlow::Normal)
             }
             Stmt::Assign { name, value } => {
                 let v = self.eval_expr(value)?;
@@ -77,13 +91,13 @@ impl<'a> Interpreter<'a> {
                     }
                     Some(binding) => {
                         binding.value = v;
-                        Ok(())
+                        Ok(ControlFlow::Normal)
                     }
                 }
             }
             Stmt::Expr(expr) => {
                 self.eval_expr(expr)?;
-                Ok(())
+                Ok(ControlFlow::Normal)
             }
             Stmt::If { condition, then_branch, else_branch } => {
                 if self.eval_condition(condition)? {
@@ -91,14 +105,24 @@ impl<'a> Interpreter<'a> {
                 } else if let Some(else_stmts) = else_branch {
                     self.exec_block(else_stmts)
                 } else {
-                    Ok(())
+                    Ok(ControlFlow::Normal)
                 }
             }
             Stmt::While { condition, body } => {
                 while self.eval_condition(condition)? {
-                    self.exec_block(body)?;
+                    let flow = self.exec_block(body)?;
+                    if let ControlFlow::Return(_) = flow {
+                        return Ok(flow);
+                    }
                 }
-                Ok(())
+                Ok(ControlFlow::Normal)
+            }
+            Stmt::Return(expr) => {
+                let value = match expr {
+                    Some(e) => self.eval_expr(e)?,
+                    None => Value::Unit,
+                };
+                Ok(ControlFlow::Return(value))
             }
         }
     }
@@ -165,20 +189,61 @@ impl<'a> Interpreter<'a> {
     }
 
     fn call_function(&mut self, callee: &str, args: &[Expr]) -> Result<Value, RuntimeError> {
-        match callee {
-            "print" => {
-                if args.len() != 1 {
-                    return Err(RuntimeError::WrongArgCount {
-                        callee: "print".to_string(),
-                        expected: 1,
-                        found: args.len(),
-                    });
-                }
-                let value = self.eval_expr(&args[0])?;
-                (self.print_sink)(&value.display());
-                Ok(Value::String(String::new()))
+        if callee == "print" {
+            if args.len() != 1 {
+                return Err(RuntimeError::WrongArgCount {
+                    callee: "print".to_string(),
+                    expected: 1,
+                    found: args.len(),
+                });
             }
-            other => Err(RuntimeError::UndefinedFunction(other.to_string())),
+            let value = self.eval_expr(&args[0])?;
+            (self.print_sink)(&value.display());
+            return Ok(Value::Unit);
+        }
+
+        let Some(func) = self.functions.get(callee).cloned() else {
+            return Err(RuntimeError::UndefinedFunction(callee.to_string()));
+        };
+
+        self.call_user_function(&func, args)
+    }
+
+    fn call_user_function(
+        &mut self,
+        func: &FunctionDecl,
+        args: &[Expr],
+    ) -> Result<Value, RuntimeError> {
+        if args.len() != func.params.len() {
+            return Err(RuntimeError::WrongArgCount {
+                callee: func.name.clone(),
+                expected: func.params.len(),
+                found: args.len(),
+            });
+        }
+
+        // Evaluate arguments in the caller's scope before switching
+        // to the callee's fresh scope.
+        let mut arg_values = Vec::with_capacity(args.len());
+        for arg in args {
+            arg_values.push(self.eval_expr(arg)?);
+        }
+
+        // Functions don't close over the caller's variables (no
+        // closures yet), so each call gets a brand-new scope
+        // containing only its parameters.
+        let mut call_env = HashMap::new();
+        for (param, value) in func.params.iter().zip(arg_values) {
+            call_env.insert(param.name.clone(), Binding { value, is_mutable: false });
+        }
+
+        let caller_env = std::mem::replace(&mut self.env, call_env);
+        let result = self.exec_block(&func.body);
+        self.env = caller_env;
+
+        match result? {
+            ControlFlow::Return(value) => Ok(value),
+            ControlFlow::Normal => Ok(Value::Unit),
         }
     }
 }
@@ -415,6 +480,92 @@ mod tests {
         assert_eq!(
             run_and_capture(source).unwrap_err(),
             RuntimeError::ImmutableAssignment("x".to_string())
+        );
+    }
+
+    #[test]
+    fn calls_user_function_with_params_and_return_value() {
+        let source = r#"
+            fn add(a: Int, b: Int) -> Int {
+                return a + b
+            }
+
+            fn main() {
+                result := add(2, 3)
+                print(result)
+            }
+        "#;
+        assert_eq!(run_and_capture(source).unwrap(), vec!["5".to_string()]);
+    }
+
+    #[test]
+    fn function_with_no_return_yields_unit() {
+        let source = r#"
+            fn sayHi() {
+                print("hi")
+            }
+
+            fn main() {
+                result := sayHi()
+                print(result)
+            }
+        "#;
+        assert_eq!(run_and_capture(source).unwrap(), vec!["hi".to_string(), "".to_string()]);
+    }
+
+    #[test]
+    fn supports_recursion() {
+        let source = r#"
+            fn fib(n: Int) -> Int {
+                if n < 2 {
+                    return n
+                }
+                return fib(n - 1) + fib(n - 2)
+            }
+
+            fn main() {
+                print(fib(10))
+            }
+        "#;
+        assert_eq!(run_and_capture(source).unwrap(), vec!["55".to_string()]);
+    }
+
+    #[test]
+    fn function_scopes_do_not_see_caller_variables() {
+        let source = r#"
+            fn f() -> Int {
+                return x
+            }
+
+            fn main() {
+                x := 5
+                print(f())
+            }
+        "#;
+        assert_eq!(
+            run_and_capture(source).unwrap_err(),
+            RuntimeError::UndefinedVariable("x".to_string())
+        );
+    }
+
+    #[test]
+    fn reports_wrong_arg_count_for_user_function() {
+        let source = r#"
+            fn add(a: Int, b: Int) -> Int {
+                return a + b
+            }
+
+            fn main() {
+                add(1)
+            }
+        "#;
+        assert_eq!(
+            run_and_capture(source).unwrap_err(),
+            RuntimeError::WrongArgCount {
+                callee: "add".to_string(),
+                expected: 2,
+                found: 1,
+            }
         );
     }
 }
