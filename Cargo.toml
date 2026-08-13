@@ -5,6 +5,7 @@ members = [
     "compiler/ast",
     "compiler/parser",
     "compiler/interpreter",
+    "cli",
 ]
 
 [workspace.package]
