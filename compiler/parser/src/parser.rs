@@ -59,19 +59,46 @@ impl Parser {
         if self.check(&TokenKind::While) {
             return self.parse_while_stmt();
         }
+        if self.check(&TokenKind::Mut) {
+            return self.parse_mut_decl();
+        }
 
-        // Lookahead: `identifier :=` is a variable declaration/assignment.
         if let TokenKind::Identifier(_) = self.peek_kind() {
-            if self.peek_at_kind(1) == Some(&TokenKind::ColonEq) {
-                let name = self.expect_identifier()?;
-                self.expect(&TokenKind::ColonEq, ":=")?;
-                let value = self.parse_expr()?;
-                return Ok(Stmt::VariableDecl { name, value });
+            match self.peek_at_kind(1) {
+                Some(&TokenKind::ColonEq) => {
+                    let name = self.expect_identifier()?;
+                    self.expect(&TokenKind::ColonEq, ":=")?;
+                    let value = self.parse_expr()?;
+                    return Ok(Stmt::VariableDecl {
+                        name,
+                        value,
+                        is_mutable: false,
+                    });
+                }
+                Some(&TokenKind::Eq) => {
+                    let name = self.expect_identifier()?;
+                    self.expect(&TokenKind::Eq, "=")?;
+                    let value = self.parse_expr()?;
+                    return Ok(Stmt::Assign { name, value });
+                }
+                _ => {}
             }
         }
 
         let expr = self.parse_expr()?;
         Ok(Stmt::Expr(expr))
+    }
+
+    fn parse_mut_decl(&mut self) -> Result<Stmt, ParseError> {
+        self.expect(&TokenKind::Mut, "mut")?;
+        let name = self.expect_identifier()?;
+        self.expect(&TokenKind::ColonEq, ":=")?;
+        let value = self.parse_expr()?;
+        Ok(Stmt::VariableDecl {
+            name,
+            value,
+            is_mutable: true,
+        })
     }
 
     fn parse_if_stmt(&mut self) -> Result<Stmt, ParseError> {
@@ -310,6 +337,7 @@ mod tests {
             Stmt::VariableDecl {
                 name: "name".to_string(),
                 value: Expr::StringLiteral("World".to_string()),
+                is_mutable: false,
             }
         );
     }
@@ -343,7 +371,6 @@ mod tests {
 
     #[test]
     fn parses_arithmetic_with_correct_precedence() {
-        // 2 + 3 * 4 should parse as 2 + (3 * 4), not (2 + 3) * 4
         let program = parse("fn main() { x := 2 + 3 * 4 }").unwrap();
         let Stmt::VariableDecl { value, .. } = &program.functions[0].body[0] else {
             panic!("expected VariableDecl");
@@ -427,7 +454,6 @@ mod tests {
 
     #[test]
     fn parses_grouping_overrides_precedence() {
-        // (2 + 3) * 4 should parse as (2 + 3) * 4, not 2 + (3 * 4)
         let program = parse("fn main() { x := (2 + 3) * 4 }").unwrap();
         let Stmt::VariableDecl { value, .. } = &program.functions[0].body[0] else {
             panic!("expected VariableDecl");
@@ -454,5 +480,30 @@ mod tests {
             ParseError::UnexpectedToken { expected, .. } => assert_eq!(expected, ")"),
             other => panic!("expected UnexpectedToken, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_mut_declaration() {
+        let program = parse("fn main() { mut x := 5 }").unwrap();
+        assert_eq!(
+            program.functions[0].body[0],
+            Stmt::VariableDecl {
+                name: "x".to_string(),
+                value: Expr::IntLiteral(5),
+                is_mutable: true,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_reassignment() {
+        let program = parse("fn main() { mut x := 5\nx = 6 }").unwrap();
+        assert_eq!(
+            program.functions[0].body[1],
+            Stmt::Assign {
+                name: "x".to_string(),
+                value: Expr::IntLiteral(6),
+            }
+        );
     }
 }

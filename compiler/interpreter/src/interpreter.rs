@@ -11,10 +11,18 @@ pub enum RuntimeError {
     NoMainFunction,
     TypeError(String),
     DivisionByZero,
+    AlreadyDeclared(String),
+    ImmutableAssignment(String),
+}
+
+/// A variable binding: its current value plus whether `=` may update it.
+struct Binding {
+    value: Value,
+    is_mutable: bool,
 }
 
 pub struct Interpreter<'a> {
-    env: HashMap<String, Value>,
+    env: HashMap<String, Binding>,
     print_sink: &'a mut dyn FnMut(&str),
 }
 
@@ -49,10 +57,29 @@ impl<'a> Interpreter<'a> {
 
     fn exec_stmt(&mut self, stmt: &Stmt) -> Result<(), RuntimeError> {
         match stmt {
-            Stmt::VariableDecl { name, value } => {
+            Stmt::VariableDecl { name, value, is_mutable } => {
+                if self.env.contains_key(name) {
+                    return Err(RuntimeError::AlreadyDeclared(name.clone()));
+                }
                 let v = self.eval_expr(value)?;
-                self.env.insert(name.clone(), v);
+                self.env.insert(
+                    name.clone(),
+                    Binding { value: v, is_mutable: *is_mutable },
+                );
                 Ok(())
+            }
+            Stmt::Assign { name, value } => {
+                let v = self.eval_expr(value)?;
+                match self.env.get_mut(name) {
+                    None => Err(RuntimeError::UndefinedVariable(name.clone())),
+                    Some(binding) if !binding.is_mutable => {
+                        Err(RuntimeError::ImmutableAssignment(name.clone()))
+                    }
+                    Some(binding) => {
+                        binding.value = v;
+                        Ok(())
+                    }
+                }
             }
             Stmt::Expr(expr) => {
                 self.eval_expr(expr)?;
@@ -97,7 +124,7 @@ impl<'a> Interpreter<'a> {
             Expr::Identifier(name) => self
                 .env
                 .get(name)
-                .cloned()
+                .map(|binding| binding.value.clone())
                 .ok_or_else(|| RuntimeError::UndefinedVariable(name.clone())),
 
             Expr::Binary { left, op, right } => {
@@ -271,13 +298,13 @@ mod tests {
     }
 
     #[test]
-    fn runs_while_loop() {
+    fn runs_while_loop_with_mut_and_assignment() {
         let source = r#"
             fn main() {
-                counter := 0
+                mut counter := 0
                 while counter < 3 {
                     print(counter)
-                    counter := counter + 1
+                    counter = counter + 1
                 }
             }
         "#;
@@ -348,5 +375,46 @@ mod tests {
     fn reports_missing_main() {
         let err = run_and_capture(r#"fn notMain() {}"#).unwrap_err();
         assert_eq!(err, RuntimeError::NoMainFunction);
+    }
+
+    #[test]
+    fn reports_redeclaration() {
+        let source = r#"
+            fn main() {
+                x := 1
+                x := 2
+            }
+        "#;
+        assert_eq!(
+            run_and_capture(source).unwrap_err(),
+            RuntimeError::AlreadyDeclared("x".to_string())
+        );
+    }
+
+    #[test]
+    fn reports_assignment_to_undeclared_variable() {
+        let source = r#"
+            fn main() {
+                x = 2
+            }
+        "#;
+        assert_eq!(
+            run_and_capture(source).unwrap_err(),
+            RuntimeError::UndefinedVariable("x".to_string())
+        );
+    }
+
+    #[test]
+    fn reports_assignment_to_immutable_variable() {
+        let source = r#"
+            fn main() {
+                x := 1
+                x = 2
+            }
+        "#;
+        assert_eq!(
+            run_and_capture(source).unwrap_err(),
+            RuntimeError::ImmutableAssignment("x".to_string())
+        );
     }
 }
