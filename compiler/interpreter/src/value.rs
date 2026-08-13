@@ -1,11 +1,9 @@
-/// Runtime values for the v0.1 milestone interpreter.
-///
-/// Only strings exist for now — enough to run the hello-world
-/// program. More variants (Int, Bool, ...) arrive with the type
-/// system in Phase 3.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Runtime values for the v0.2 milestone interpreter.
+#[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     String(String),
+    Int(i64),
+    Bool(bool),
 }
 
 impl Value {
@@ -13,6 +11,17 @@ impl Value {
     pub fn display(&self) -> String {
         match self {
             Value::String(s) => s.clone(),
+            Value::Int(i) => i.to_string(),
+            Value::Bool(b) => b.to_string(),
+        }
+    }
+
+    /// A short name used in type-error messages.
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            Value::String(_) => "String",
+            Value::Int(_) => "Int",
+            Value::Bool(_) => "Bool",
         }
     }
 }

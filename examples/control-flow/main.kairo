@@ -1,0 +1,12 @@
+fn main() {
+    age := 20
+
+    if age >= 18 {
+        print("adult")
+    } else {
+        print("minor")
+    }
+
+    total := 2 + 3 * 4
+    print(total)
+}

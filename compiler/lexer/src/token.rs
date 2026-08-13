@@ -4,10 +4,15 @@ use crate::span::Span;
 pub enum TokenKind {
     // Keywords
     Fn,
+    If,
+    Else,
+    True,
+    False,
 
     // Literals
     Identifier(String),
     StringLiteral(String),
+    IntLiteral(i64),
 
     // Punctuation
     LParen,   // (
@@ -16,6 +21,15 @@ pub enum TokenKind {
     RBrace,   // }
     ColonEq,  // :=
     Plus,     // +
+    Minus,    // -
+    Star,     // *
+    Slash,    // /
+    EqEq,     // ==
+    NotEq,    // !=
+    Lt,       // 
+    Gt,       // >
+    LtEq,     // <=
+    GtEq,     // >=
 
     Eof,
 }
