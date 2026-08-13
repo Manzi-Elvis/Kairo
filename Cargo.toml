@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = [
+    "compiler/lexer",
+    "compiler/ast",
+    "compiler/parser",
+    "compiler/interpreter",
+    "cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Manzi-Elvis/Kairo"

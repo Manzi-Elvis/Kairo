@@ -1,0 +1,17 @@
+[package]
+name = "kairo"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The Kairo programming language CLI"
+
+[[bin]]
+name = "kairo"
+path = "src/main.rs"
+
+[dependencies]
+kairo-ast = { path = "../compiler/ast" }
+kairo-lexer = { path = "../compiler/lexer" }
+kairo-parser = { path = "../compiler/parser" }
+kairo-interpreter = { path = "../compiler/interpreter" }

@@ -1,0 +1,254 @@
+use crate::span::Span;
+use crate::token::{Token, TokenKind};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LexError {
+    UnterminatedString { line: usize, column: usize },
+    UnrecognizedChar { ch: char, line: usize, column: usize },
+}
+
+pub struct Lexer {
+    chars: Vec<char>,
+    pos: usize,
+    line: usize,
+    column: usize,
+}
+
+impl Lexer {
+    pub fn new(source: &str) -> Self {
+        Self {
+            chars: source.chars().collect(),
+            pos: 0,
+            line: 1,
+            column: 1,
+        }
+    }
+
+    pub fn tokenize(mut self) -> Result<Vec<Token>, LexError> {
+        let mut tokens = Vec::new();
+        loop {
+            self.skip_whitespace_and_comments();
+
+            let start_pos = self.pos;
+            let start_line = self.line;
+            let start_col = self.column;
+
+            let Some(ch) = self.peek() else {
+                tokens.push(Token::new(
+                    TokenKind::Eof,
+                    Span::new(start_pos, start_pos, start_line, start_col),
+                ));
+                break;
+            };
+
+            let kind = if ch.is_alphabetic() || ch == '_' {
+                self.lex_identifier_or_keyword()
+            } else if ch == '"' {
+                self.lex_string()?
+            } else {
+                self.lex_punctuation()?
+            };
+
+            let end_pos = self.pos;
+            tokens.push(Token::new(
+                kind,
+                Span::new(start_pos, end_pos, start_line, start_col),
+            ));
+        }
+        Ok(tokens)
+    }
+
+    fn peek(&self) -> Option<char> {
+        self.chars.get(self.pos).copied()
+    }
+
+    fn peek_at(&self, offset: usize) -> Option<char> {
+        self.chars.get(self.pos + offset).copied()
+    }
+
+    fn advance(&mut self) -> Option<char> {
+        let ch = self.peek()?;
+        self.pos += 1;
+        if ch == '\n' {
+            self.line += 1;
+            self.column = 1;
+        } else {
+            self.column += 1;
+        }
+        Some(ch)
+    }
+
+    fn skip_whitespace_and_comments(&mut self) {
+        loop {
+            match self.peek() {
+                Some(c) if c.is_whitespace() => {
+                    self.advance();
+                }
+                Some('/') if self.peek_at(1) == Some('/') => {
+                    while let Some(c) = self.peek() {
+                        if c == '\n' {
+                            break;
+                        }
+                        self.advance();
+                    }
+                }
+                _ => break,
+            }
+        }
+    }
+
+    fn lex_identifier_or_keyword(&mut self) -> TokenKind {
+        let mut ident = String::new();
+        while let Some(c) = self.peek() {
+            if c.is_alphanumeric() || c == '_' {
+                ident.push(c);
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        match ident.as_str() {
+            "fn" => TokenKind::Fn,
+            _ => TokenKind::Identifier(ident),
+        }
+    }
+
+    fn lex_string(&mut self) -> Result<TokenKind, LexError> {
+        let start_line = self.line;
+        let start_col = self.column;
+        self.advance(); // consume opening quote
+
+        let mut value = String::new();
+        loop {
+            match self.peek() {
+                None => {
+                    return Err(LexError::UnterminatedString {
+                        line: start_line,
+                        column: start_col,
+                    })
+                }
+                Some('"') => {
+                    self.advance();
+                    break;
+                }
+                Some(c) => {
+                    value.push(c);
+                    self.advance();
+                }
+            }
+        }
+        Ok(TokenKind::StringLiteral(value))
+    }
+
+    fn lex_punctuation(&mut self) -> Result<TokenKind, LexError> {
+        let line = self.line;
+        let column = self.column;
+        let ch = self.advance().unwrap();
+
+        match ch {
+            '(' => Ok(TokenKind::LParen),
+            ')' => Ok(TokenKind::RParen),
+            '{' => Ok(TokenKind::LBrace),
+            '}' => Ok(TokenKind::RBrace),
+            '+' => Ok(TokenKind::Plus),
+            ':' if self.peek() == Some('=') => {
+                self.advance();
+                Ok(TokenKind::ColonEq)
+            }
+            other => Err(LexError::UnrecognizedChar {
+                ch: other,
+                line,
+                column,
+            }),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn kinds(source: &str) -> Vec<TokenKind> {
+        Lexer::new(source)
+            .tokenize()
+            .unwrap()
+            .into_iter()
+            .map(|t| t.kind)
+            .collect()
+    }
+
+    #[test]
+    fn tokenizes_hello_world() {
+        let source = r#"
+            fn main() {
+                name := "World"
+                print("Hello, " + name)
+            }
+        "#;
+
+        let kinds = kinds(source);
+
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::Fn,
+                TokenKind::Identifier("main".into()),
+                TokenKind::LParen,
+                TokenKind::RParen,
+                TokenKind::LBrace,
+                TokenKind::Identifier("name".into()),
+                TokenKind::ColonEq,
+                TokenKind::StringLiteral("World".into()),
+                TokenKind::Identifier("print".into()),
+                TokenKind::LParen,
+                TokenKind::StringLiteral("Hello, ".into()),
+                TokenKind::Plus,
+                TokenKind::Identifier("name".into()),
+                TokenKind::RParen,
+                TokenKind::RBrace,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn skips_line_comments() {
+        let kinds = kinds("fn // a comment\nmain");
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::Fn,
+                TokenKind::Identifier("main".into()),
+                TokenKind::Eof
+            ]
+        );
+    }
+
+    #[test]
+    fn reports_unterminated_string() {
+        let err = Lexer::new(r#""unterminated"#).tokenize().unwrap_err();
+        assert_eq!(err, LexError::UnterminatedString { line: 1, column: 1 });
+    }
+
+    #[test]
+    fn reports_unrecognized_char() {
+        let err = Lexer::new("fn main() { @ }").tokenize().unwrap_err();
+        assert_eq!(
+            err,
+            LexError::UnrecognizedChar {
+                ch: '@',
+                line: 1,
+                column: 13
+            }
+        );
+    }
+
+    #[test]
+    fn tracks_spans_correctly() {
+        let tokens = Lexer::new("fn").tokenize().unwrap();
+        assert_eq!(tokens[0].span.start, 0);
+        assert_eq!(tokens[0].span.end, 2);
+        assert_eq!(tokens[0].span.line, 1);
+        assert_eq!(tokens[0].span.column, 1);
+    }
+}
