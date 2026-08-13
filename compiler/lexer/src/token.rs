@@ -7,6 +7,7 @@ pub enum TokenKind {
     If,
     Else,
     While,
+    Mut,
     True,
     False,
 
@@ -21,6 +22,7 @@ pub enum TokenKind {
     LBrace,   // {
     RBrace,   // }
     ColonEq,  // :=
+    Eq,       // =
     Plus,     // +
     Minus,    // -
     Star,     // *
