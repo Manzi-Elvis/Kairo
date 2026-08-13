@@ -59,15 +59,7 @@ impl<'a> Interpreter<'a> {
                 Ok(())
             }
             Stmt::If { condition, then_branch, else_branch } => {
-                let cond_value = self.eval_expr(condition)?;
-                let Value::Bool(is_true) = cond_value else {
-                    return Err(RuntimeError::TypeError(format!(
-                        "if condition must be Bool, found {}",
-                        cond_value.type_name()
-                    )));
-                };
-
-                if is_true {
+                if self.eval_condition(condition)? {
                     self.exec_block(then_branch)
                 } else if let Some(else_stmts) = else_branch {
                     self.exec_block(else_stmts)
@@ -75,6 +67,24 @@ impl<'a> Interpreter<'a> {
                     Ok(())
                 }
             }
+            Stmt::While { condition, body } => {
+                while self.eval_condition(condition)? {
+                    self.exec_block(body)?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Evaluates an expression expected to produce a Bool, erroring
+    /// with a clear message otherwise (used by if and while).
+    fn eval_condition(&mut self, condition: &Expr) -> Result<bool, RuntimeError> {
+        match self.eval_expr(condition)? {
+            Value::Bool(b) => Ok(b),
+            other => Err(RuntimeError::TypeError(format!(
+                "condition must be Bool, found {}",
+                other.type_name()
+            ))),
         }
     }
 
@@ -209,6 +219,17 @@ mod tests {
     }
 
     #[test]
+    fn runs_grouping_overrides_precedence() {
+        let source = r#"
+            fn main() {
+                x := (2 + 3) * 4
+                print(x)
+            }
+        "#;
+        assert_eq!(run_and_capture(source).unwrap(), vec!["20".to_string()]);
+    }
+
+    #[test]
     fn runs_if_true_branch() {
         let source = r#"
             fn main() {
@@ -247,6 +268,36 @@ mod tests {
             }
         "#;
         assert_eq!(run_and_capture(source).unwrap(), vec!["after".to_string()]);
+    }
+
+    #[test]
+    fn runs_while_loop() {
+        let source = r#"
+            fn main() {
+                counter := 0
+                while counter < 3 {
+                    print(counter)
+                    counter := counter + 1
+                }
+            }
+        "#;
+        assert_eq!(
+            run_and_capture(source).unwrap(),
+            vec!["0".to_string(), "1".to_string(), "2".to_string()]
+        );
+    }
+
+    #[test]
+    fn while_loop_never_runs_if_condition_starts_false() {
+        let source = r#"
+            fn main() {
+                while false {
+                    print("nope")
+                }
+                print("done")
+            }
+        "#;
+        assert_eq!(run_and_capture(source).unwrap(), vec!["done".to_string()]);
     }
 
     #[test]

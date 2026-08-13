@@ -56,8 +56,11 @@ impl Parser {
         if self.check(&TokenKind::If) {
             return self.parse_if_stmt();
         }
+        if self.check(&TokenKind::While) {
+            return self.parse_while_stmt();
+        }
 
-        // Lookahead: `identifier :=` is a variable declaration.
+        // Lookahead: `identifier :=` is a variable declaration/assignment.
         if let TokenKind::Identifier(_) = self.peek_kind() {
             if self.peek_at_kind(1) == Some(&TokenKind::ColonEq) {
                 let name = self.expect_identifier()?;
@@ -93,6 +96,16 @@ impl Parser {
             then_branch,
             else_branch,
         })
+    }
+
+    fn parse_while_stmt(&mut self) -> Result<Stmt, ParseError> {
+        self.expect(&TokenKind::While, "while")?;
+        let condition = self.parse_expr()?;
+        self.expect(&TokenKind::LBrace, "{")?;
+        let body = self.parse_block_stmts()?;
+        self.expect(&TokenKind::RBrace, "}")?;
+
+        Ok(Stmt::While { condition, body })
     }
 
     // --- expression parsing, lowest to highest precedence ---
@@ -165,6 +178,12 @@ impl Parser {
 
     fn parse_primary(&mut self) -> Result<Expr, ParseError> {
         match self.peek_kind().clone() {
+            TokenKind::LParen => {
+                self.advance();
+                let inner = self.parse_expr()?;
+                self.expect(&TokenKind::RParen, ")")?;
+                Ok(inner)
+            }
             TokenKind::StringLiteral(value) => {
                 self.advance();
                 Ok(Expr::StringLiteral(value))
@@ -206,7 +225,7 @@ impl Parser {
             return Ok(args);
         }
         args.push(self.parse_expr()?);
-        // No comma token defined yet in v0.1/v0.2 grammar, so single-arg calls only.
+        // No comma token defined yet, so single-arg calls only.
         Ok(args)
     }
 
@@ -380,5 +399,60 @@ mod tests {
             panic!("expected If statement");
         };
         assert!(else_branch.is_none());
+    }
+
+    #[test]
+    fn parses_while_loop() {
+        let source = r#"
+            fn main() {
+                while 1 < 2 {
+                    print("looping")
+                }
+            }
+        "#;
+        let program = parse(source).unwrap();
+        let Stmt::While { condition, body } = &program.functions[0].body[0] else {
+            panic!("expected While statement");
+        };
+        assert_eq!(
+            *condition,
+            Expr::Binary {
+                left: Box::new(Expr::IntLiteral(1)),
+                op: BinaryOp::Lt,
+                right: Box::new(Expr::IntLiteral(2)),
+            }
+        );
+        assert_eq!(body.len(), 1);
+    }
+
+    #[test]
+    fn parses_grouping_overrides_precedence() {
+        // (2 + 3) * 4 should parse as (2 + 3) * 4, not 2 + (3 * 4)
+        let program = parse("fn main() { x := (2 + 3) * 4 }").unwrap();
+        let Stmt::VariableDecl { value, .. } = &program.functions[0].body[0] else {
+            panic!("expected VariableDecl");
+        };
+
+        assert_eq!(
+            *value,
+            Expr::Binary {
+                left: Box::new(Expr::Binary {
+                    left: Box::new(Expr::IntLiteral(2)),
+                    op: BinaryOp::Add,
+                    right: Box::new(Expr::IntLiteral(3)),
+                }),
+                op: BinaryOp::Mul,
+                right: Box::new(Expr::IntLiteral(4)),
+            }
+        );
+    }
+
+    #[test]
+    fn reports_unclosed_grouping() {
+        let err = parse("fn main() { x := (2 + 3 }").unwrap_err();
+        match err {
+            ParseError::UnexpectedToken { expected, .. } => assert_eq!(expected, ")"),
+            other => panic!("expected UnexpectedToken, got {other:?}"),
+        }
     }
 }

@@ -1,8 +1,9 @@
-//! AST node definitions for Kairo v0.2 milestone scope.
+//! AST node definitions for Kairo v0.3 milestone scope.
 //!
 //! Covers function declarations, variable declarations, string and
 //! int literals, booleans, arithmetic/comparison binary operators,
-//! calls, and if/else statements.
+//! calls, if/else statements, while loops, and grouping expressions
+//! (grouping doesn't need its own node — it just controls parse order).
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
@@ -26,6 +27,11 @@ pub enum Stmt {
         condition: Expr,
         then_branch: Vec<Stmt>,
         else_branch: Option<Vec<Stmt>>,
+    },
+    /// `while <cond> { ... }`
+    While {
+        condition: Expr,
+        body: Vec<Stmt>,
     },
 }
 
