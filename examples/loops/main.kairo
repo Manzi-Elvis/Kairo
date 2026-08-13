@@ -1,0 +1,10 @@
+fn main() {
+    counter := 0
+    while counter < 5 {
+        print(counter)
+        counter := counter + 1
+    }
+
+    result := (2 + 3) * (4 - 1)
+    print(result)
+}
