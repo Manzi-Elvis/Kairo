@@ -1,7 +1,5 @@
-'EOF'
-/target
+﻿/target
 **/*.rs.bk
 .DS_Store
 *.pdb
 Cargo.lock.bak
-EOF
