@@ -4,6 +4,7 @@ members = [
     "compiler/lexer",
     "compiler/ast",
     "compiler/parser",
+    "compiler/interpreter",
 ]
 
 [workspace.package]
