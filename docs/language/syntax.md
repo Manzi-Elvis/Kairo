@@ -54,3 +54,38 @@
 - `:=` on a name already declared in the same scope → error (no shadowing yet)
 - `=` on a name that was never declared → error
 - `=` on a name declared without `mut` → error (immutable)
+
+---
+
+# Kairo v0.5 additions: user-defined functions
+
+## New tokens
+- Keyword: `return`
+- Punctuation: `,` (comma), `:` (colon, distinct from `:=`), `->` (arrow)
+
+## New function syntax
+
+```
+fn name(param: Type, param2: Type) -> ReturnType { ... }
+```
+
+- Parameters are comma-separated `name: Type` pairs (zero or more)
+- `-> ReturnType` is optional; omitting it means the function returns Unit
+- Type names are parsed but not statically checked yet (no type-checker
+  pass exists until Phase 3) — mismatches surface as runtime TypeErrors
+  the same way untyped values already do
+
+## New statement
+- `return <expr>` — returns a value from the current function
+- `return` (bare, immediately before `}`) — returns Unit
+
+## New value
+- `Unit` — the "no meaningful value" result of a function with no
+  return statement, or a bare `return`
+
+## Semantics
+- Functions do not close over the caller's variables (no closures yet)
+  — each call gets a fresh, empty variable scope containing only its
+    parameters
+- Recursion is supported (functions can call themselves and each other)
+- Calling a function with the wrong number of arguments is a runtime error

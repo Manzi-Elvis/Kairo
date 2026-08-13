@@ -1,10 +1,12 @@
-//! AST node definitions for Kairo v0.4 milestone scope.
+//! AST node definitions for Kairo v0.5 milestone scope.
 //!
-//! Covers function declarations, immutable/mutable variable
-//! declarations, reassignment, string and int literals, booleans,
-//! arithmetic/comparison binary operators, calls, if/else
-//! statements, while loops, and grouping expressions (grouping
-//! doesn't need its own node — it just controls parse order).
+//! Covers user-defined functions with typed parameters and an
+//! optional return type, return statements, mutable/immutable
+//! variable declarations, reassignment, string/int/bool literals,
+//! arithmetic/comparison operators, calls with comma-separated
+//! arguments, if/else, while loops, and grouping expressions
+//! (grouping doesn't need its own node — it just controls parse
+//! order).
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
@@ -14,7 +16,17 @@ pub struct Program {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionDecl {
     pub name: String,
+    pub params: Vec<Param>,
+    /// Parsed but not statically checked yet — no type-checker pass
+    /// exists until Phase 3. `None` means the function returns Unit.
+    pub return_type: Option<String>,
     pub body: Vec<Stmt>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Param {
+    pub name: String,
+    pub type_name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,6 +49,8 @@ pub enum Stmt {
     },
     /// `while <cond> { ... }`
     While { condition: Expr, body: Vec<Stmt> },
+    /// `return <expr>` or bare `return`
+    Return(Option<Expr>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

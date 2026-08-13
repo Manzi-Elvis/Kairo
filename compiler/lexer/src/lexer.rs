@@ -115,6 +115,7 @@ impl Lexer {
             "else" => TokenKind::Else,
             "while" => TokenKind::While,
             "mut" => TokenKind::Mut,
+            "return" => TokenKind::Return,
             "true" => TokenKind::True,
             "false" => TokenKind::False,
             _ => TokenKind::Identifier(ident),
@@ -172,7 +173,12 @@ impl Lexer {
             ')' => Ok(TokenKind::RParen),
             '{' => Ok(TokenKind::LBrace),
             '}' => Ok(TokenKind::RBrace),
+            ',' => Ok(TokenKind::Comma),
             '+' => Ok(TokenKind::Plus),
+            '-' if self.peek() == Some('>') => {
+                self.advance();
+                Ok(TokenKind::Arrow)
+            }
             '-' => Ok(TokenKind::Minus),
             '*' => Ok(TokenKind::Star),
             '/' => Ok(TokenKind::Slash),
@@ -198,6 +204,7 @@ impl Lexer {
                 self.advance();
                 Ok(TokenKind::ColonEq)
             }
+            ':' => Ok(TokenKind::Colon),
             '=' => Ok(TokenKind::Eq),
             other => Err(LexError::UnrecognizedChar {
                 ch: other,
@@ -358,6 +365,34 @@ mod tests {
                 TokenKind::Identifier("x".into()),
                 TokenKind::Eq,
                 TokenKind::IntLiteral(2),
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn tokenizes_function_signature() {
+        let kinds = kinds("fn add(a: Int, b: Int) -> Int { return a }");
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::Fn,
+                TokenKind::Identifier("add".into()),
+                TokenKind::LParen,
+                TokenKind::Identifier("a".into()),
+                TokenKind::Colon,
+                TokenKind::Identifier("Int".into()),
+                TokenKind::Comma,
+                TokenKind::Identifier("b".into()),
+                TokenKind::Colon,
+                TokenKind::Identifier("Int".into()),
+                TokenKind::RParen,
+                TokenKind::Arrow,
+                TokenKind::Identifier("Int".into()),
+                TokenKind::LBrace,
+                TokenKind::Return,
+                TokenKind::Identifier("a".into()),
+                TokenKind::RBrace,
                 TokenKind::Eof,
             ]
         );
