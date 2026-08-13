@@ -113,6 +113,7 @@ impl Lexer {
             "fn" => TokenKind::Fn,
             "if" => TokenKind::If,
             "else" => TokenKind::Else,
+            "while" => TokenKind::While,
             "true" => TokenKind::True,
             "false" => TokenKind::False,
             _ => TokenKind::Identifier(ident),
@@ -322,6 +323,21 @@ mod tests {
                 TokenKind::Else,
                 TokenKind::True,
                 TokenKind::False,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn tokenizes_while_keyword() {
+        let kinds = kinds("while true {}");
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::While,
+                TokenKind::True,
+                TokenKind::LBrace,
+                TokenKind::RBrace,
                 TokenKind::Eof,
             ]
         );

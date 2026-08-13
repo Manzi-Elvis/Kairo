@@ -6,6 +6,7 @@ pub enum TokenKind {
     Fn,
     If,
     Else,
+    While,
     True,
     False,
 
