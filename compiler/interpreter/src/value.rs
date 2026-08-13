@@ -1,9 +1,12 @@
-/// Runtime values for the v0.2 milestone interpreter.
+/// Runtime values for the v0.5 milestone interpreter.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     String(String),
     Int(i64),
     Bool(bool),
+    /// The result of a function with no return statement, or a bare
+    /// `return`. Not user-constructible from source syntax yet.
+    Unit,
 }
 
 impl Value {
@@ -13,6 +16,7 @@ impl Value {
             Value::String(s) => s.clone(),
             Value::Int(i) => i.to_string(),
             Value::Bool(b) => b.to_string(),
+            Value::Unit => String::new(),
         }
     }
 
@@ -22,6 +26,7 @@ impl Value {
             Value::String(_) => "String",
             Value::Int(_) => "Int",
             Value::Bool(_) => "Bool",
+            Value::Unit => "Unit",
         }
     }
 }

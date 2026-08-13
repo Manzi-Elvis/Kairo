@@ -1,4 +1,4 @@
-use kairo_ast::{BinaryOp, Expr, FunctionDecl, Program, Stmt};
+use kairo_ast::{BinaryOp, Expr, FunctionDecl, Param, Program, Stmt};
 use kairo_lexer::{Span, Token, TokenKind};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,12 +35,46 @@ impl Parser {
         self.expect(&TokenKind::Fn, "fn")?;
         let name = self.expect_identifier()?;
         self.expect(&TokenKind::LParen, "(")?;
+        let params = self.parse_params()?;
         self.expect(&TokenKind::RParen, ")")?;
+
+        let return_type = if self.check(&TokenKind::Arrow) {
+            self.advance();
+            Some(self.expect_identifier()?)
+        } else {
+            None
+        };
+
         self.expect(&TokenKind::LBrace, "{")?;
         let body = self.parse_block_stmts()?;
         self.expect(&TokenKind::RBrace, "}")?;
 
-        Ok(FunctionDecl { name, body })
+        Ok(FunctionDecl {
+            name,
+            params,
+            return_type,
+            body,
+        })
+    }
+
+    fn parse_params(&mut self) -> Result<Vec<Param>, ParseError> {
+        let mut params = Vec::new();
+        if self.check(&TokenKind::RParen) {
+            return Ok(params);
+        }
+        params.push(self.parse_param()?);
+        while self.check(&TokenKind::Comma) {
+            self.advance();
+            params.push(self.parse_param()?);
+        }
+        Ok(params)
+    }
+
+    fn parse_param(&mut self) -> Result<Param, ParseError> {
+        let name = self.expect_identifier()?;
+        self.expect(&TokenKind::Colon, ":")?;
+        let type_name = self.expect_identifier()?;
+        Ok(Param { name, type_name })
     }
 
     /// Parses statements until (but not consuming) the next `}`.
@@ -61,6 +95,9 @@ impl Parser {
         }
         if self.check(&TokenKind::Mut) {
             return self.parse_mut_decl();
+        }
+        if self.check(&TokenKind::Return) {
+            return self.parse_return_stmt();
         }
 
         if let TokenKind::Identifier(_) = self.peek_kind() {
@@ -99,6 +136,18 @@ impl Parser {
             value,
             is_mutable: true,
         })
+    }
+
+    fn parse_return_stmt(&mut self) -> Result<Stmt, ParseError> {
+        self.expect(&TokenKind::Return, "return")?;
+        // A bare `return` (no expression) is only valid right before
+        // the closing brace of its block.
+        if self.check(&TokenKind::RBrace) {
+            Ok(Stmt::Return(None))
+        } else {
+            let value = self.parse_expr()?;
+            Ok(Stmt::Return(Some(value)))
+        }
     }
 
     fn parse_if_stmt(&mut self) -> Result<Stmt, ParseError> {
@@ -252,7 +301,10 @@ impl Parser {
             return Ok(args);
         }
         args.push(self.parse_expr()?);
-        // No comma token defined yet, so single-arg calls only.
+        while self.check(&TokenKind::Comma) {
+            self.advance();
+            args.push(self.parse_expr()?);
+        }
         Ok(args)
     }
 
@@ -331,6 +383,8 @@ mod tests {
         let program = parse(source).expect("parse failed");
         let func = &program.functions[0];
         assert_eq!(func.name, "main");
+        assert_eq!(func.params.len(), 0);
+        assert_eq!(func.return_type, None);
 
         assert_eq!(
             func.body[0],
@@ -503,6 +557,57 @@ mod tests {
             Stmt::Assign {
                 name: "x".to_string(),
                 value: Expr::IntLiteral(6),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_function_with_params_and_return_type() {
+        let program = parse("fn add(a: Int, b: Int) -> Int { return a + b }").unwrap();
+        let func = &program.functions[0];
+
+        assert_eq!(func.name, "add");
+        assert_eq!(
+            func.params,
+            vec![
+                Param { name: "a".to_string(), type_name: "Int".to_string() },
+                Param { name: "b".to_string(), type_name: "Int".to_string() },
+            ]
+        );
+        assert_eq!(func.return_type, Some("Int".to_string()));
+        assert_eq!(
+            func.body[0],
+            Stmt::Return(Some(Expr::Binary {
+                left: Box::new(Expr::Identifier("a".to_string())),
+                op: BinaryOp::Add,
+                right: Box::new(Expr::Identifier("b".to_string())),
+            }))
+        );
+    }
+
+    #[test]
+    fn parses_function_with_no_params() {
+        let program = parse("fn greet() -> Int { return 1 }").unwrap();
+        assert_eq!(program.functions[0].params.len(), 0);
+    }
+
+    #[test]
+    fn parses_bare_return() {
+        let program = parse("fn f() { return }").unwrap();
+        assert_eq!(program.functions[0].body[0], Stmt::Return(None));
+    }
+
+    #[test]
+    fn parses_call_with_multiple_args() {
+        let program = parse("fn main() { x := add(1, 2) }").unwrap();
+        let Stmt::VariableDecl { value, .. } = &program.functions[0].body[0] else {
+            panic!("expected VariableDecl");
+        };
+        assert_eq!(
+            *value,
+            Expr::Call {
+                callee: "add".to_string(),
+                args: vec![Expr::IntLiteral(1), Expr::IntLiteral(2)],
             }
         );
     }
