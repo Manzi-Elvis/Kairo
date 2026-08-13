@@ -36,3 +36,21 @@
 
 ## New expressions
 - `( <expr> )` — grouping, highest precedence, above primary literals
+
+---
+
+# Kairo v0.4 additions: mut, real assignment
+
+## New tokens
+- Keyword: `mut`
+- Operator: `=` (plain assignment, distinct from `:=` and `==`)
+
+## New statement forms
+- `mut name := <expr>` — declares a **mutable** variable
+- `name := <expr>` — declares an **immutable** variable (unchanged from v0.1)
+- `name = <expr>` — reassigns an existing **mutable** variable
+
+## New error cases
+- `:=` on a name already declared in the same scope → error (no shadowing yet)
+- `=` on a name that was never declared → error
+- `=` on a name declared without `mut` → error (immutable)

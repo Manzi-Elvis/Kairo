@@ -114,6 +114,7 @@ impl Lexer {
             "if" => TokenKind::If,
             "else" => TokenKind::Else,
             "while" => TokenKind::While,
+            "mut" => TokenKind::Mut,
             "true" => TokenKind::True,
             "false" => TokenKind::False,
             _ => TokenKind::Identifier(ident),
@@ -197,6 +198,7 @@ impl Lexer {
                 self.advance();
                 Ok(TokenKind::ColonEq)
             }
+            '=' => Ok(TokenKind::Eq),
             other => Err(LexError::UnrecognizedChar {
                 ch: other,
                 line,
@@ -338,6 +340,24 @@ mod tests {
                 TokenKind::True,
                 TokenKind::LBrace,
                 TokenKind::RBrace,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn tokenizes_mut_and_assignment() {
+        let kinds = kinds("mut x := 1\nx = 2");
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::Mut,
+                TokenKind::Identifier("x".into()),
+                TokenKind::ColonEq,
+                TokenKind::IntLiteral(1),
+                TokenKind::Identifier("x".into()),
+                TokenKind::Eq,
+                TokenKind::IntLiteral(2),
                 TokenKind::Eof,
             ]
         );
