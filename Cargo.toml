@@ -2,6 +2,8 @@
 resolver = "2"
 members = [
     "compiler/lexer",
+    "compiler/ast",
+    "compiler/parser",
 ]
 
 [workspace.package]
