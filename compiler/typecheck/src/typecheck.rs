@@ -1,4 +1,4 @@
-use kairo_ast::{BinaryOp, Expr, FunctionDecl, Program, Stmt, StructDecl};
+use kairo_ast::{BinaryOp, EnumDecl, Expr, FunctionDecl, Program, Stmt, StructDecl};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -8,6 +8,7 @@ pub enum Type {
     String,
     Unit,
     Struct(String),
+    Enum(String),
 }
 
 impl Type {
@@ -18,6 +19,7 @@ impl Type {
             Type::String => "String".to_string(),
             Type::Unit => "Unit".to_string(),
             Type::Struct(n) => n.clone(),
+            Type::Enum(n) => n.clone(),
         }
     }
 }
@@ -37,6 +39,8 @@ pub enum TypeError {
     DuplicateField(String),
     NotAStruct(String),
     NoMainFunction,
+    UndefinedEnum(String),
+    UndefinedVariant { enum_name: String, variant: String },
 }
 
 struct FunctionSig {
@@ -47,6 +51,8 @@ struct FunctionSig {
 pub struct TypeChecker {
     struct_names: HashSet<String>,
     struct_fields: HashMap<String, HashMap<String, Type>>,
+    enum_names: HashSet<String>,
+    enum_variants: HashMap<String, HashMap<String, HashMap<String, Type>>>,
     functions: HashMap<String, FunctionSig>,
 }
 
@@ -57,13 +63,15 @@ impl Default for TypeChecker {
 }
 
 impl TypeChecker {
-    pub fn new() -> Self {
-        Self {
-            struct_names: HashSet::new(),
-            struct_fields: HashMap::new(),
-            functions: HashMap::new(),
-        }
-    }
+      pub fn new() -> Self {
+            Self {
+                  struct_names: HashSet::new(),
+                  struct_fields: HashMap::new(),
+                  enum_names: HashSet::new(),
+                  enum_variants: HashMap::new(),
+                  functions: HashMap::new(),
+            }
+      }
 
     pub fn check_program(&mut self, program: &Program) -> Result<(), Vec<TypeError>> {
         let mut errors = Vec::new();
@@ -73,6 +81,12 @@ impl TypeChecker {
         }
         for s in &program.structs {
             self.collect_struct_fields(s, &mut errors);
+        }
+        for e in &program.enums {
+            self.enum_names.insert(e.name.clone());
+        }
+        for e in &program.enums {
+            self.collect_enum_variants(e, &mut errors);
         }
         for f in &program.functions {
             self.collect_function_sig(f, &mut errors);
@@ -85,18 +99,19 @@ impl TypeChecker {
         }
 
         if errors.is_empty() { Ok(()) } else { Err(errors) }
-    }
+      }
 
-    fn resolve_type(&self, name: &str) -> Option<Type> {
-        match name {
-            "Int" => Some(Type::Int),
-            "Bool" => Some(Type::Bool),
-            "String" => Some(Type::String),
-            "Unit" => Some(Type::Unit),
-            other if self.struct_names.contains(other) => Some(Type::Struct(other.to_string())),
-            _ => None,
-        }
-    }
+      fn resolve_type(&self, name: &str) -> Option<Type> {
+            match name {
+                  "Int" => Some(Type::Int),
+                  "Bool" => Some(Type::Bool),
+                  "String" => Some(Type::String),
+                  "Unit" => Some(Type::Unit),
+                  other if self.struct_names.contains(other) => Some(Type::Struct(other.to_string())),
+                  other if self.enum_names.contains(other) => Some(Type::Enum(other.to_string())),
+                  _ => None,
+            }
+      }
 
     fn collect_struct_fields(&mut self, s: &StructDecl, errors: &mut Vec<TypeError>) {
         let mut fields = HashMap::new();
@@ -107,6 +122,21 @@ impl TypeChecker {
             }
         }
         self.struct_fields.insert(s.name.clone(), fields);
+    }
+
+    fn collect_enum_variants(&mut self, e: &EnumDecl, errors: &mut Vec<TypeError>) {
+        let mut variants = HashMap::new();
+        for v in &e.variants {
+            let mut fields = HashMap::new();
+            for field in &v.fields {
+                match self.resolve_type(&field.type_name) {
+                    Some(t) => { fields.insert(field.name.clone(), t); }
+                    None => errors.push(TypeError::UndefinedType(field.type_name.clone())),
+                }
+            }
+            variants.insert(v.name.clone(), fields);
+        }
+        self.enum_variants.insert(e.name.clone(), variants);
     }
 
     fn collect_function_sig(&mut self, f: &FunctionDecl, errors: &mut Vec<TypeError>) {
@@ -260,6 +290,9 @@ impl TypeChecker {
             Expr::StructLiteral { name, fields } => {
                 self.check_struct_literal(name, fields, scope, errors)
             }
+            Expr::EnumLiteral { enum_name, variant, fields } => {
+                self.check_enum_literal(enum_name, variant, fields, scope, errors)
+            }
             Expr::FieldAccess { object, field } => {
                 let obj_type = self.eval_expr_type(object, scope, errors)?;
                 match &obj_type {
@@ -386,7 +419,7 @@ impl TypeChecker {
         fields: &[(String, Expr)],
         scope: &HashMap<String, (Type, bool)>,
         errors: &mut Vec<TypeError>,
-    ) -> Option<Type> {
+        ) -> Option<Type> {
         let Some(decl_fields) = self.struct_fields.get(name) else {
             errors.push(TypeError::UndefinedStruct(name.to_string()));
             for (_, e) in fields {
@@ -432,6 +465,68 @@ impl TypeChecker {
         }
 
         Some(Type::Struct(name.to_string()))
+      }
+
+    fn check_enum_literal(
+        &self,
+        enum_name: &str,
+        variant: &str,
+        fields: &[(String, Expr)],
+        scope: &HashMap<String, (Type, bool)>,
+        errors: &mut Vec<TypeError>,
+    ) -> Option<Type> {
+        let Some(variants) = self.enum_variants.get(enum_name) else {
+            errors.push(TypeError::UndefinedEnum(enum_name.to_string()));
+            for (_, e) in fields {
+                self.eval_expr_type(e, scope, errors);
+            }
+            return None;
+        };
+        let Some(decl_fields) = variants.get(variant) else {
+            errors.push(TypeError::UndefinedVariant {
+                enum_name: enum_name.to_string(),
+                variant: variant.to_string(),
+            });
+            for (_, e) in fields {
+                self.eval_expr_type(e, scope, errors);
+            }
+            return None;
+        };
+
+        let mut seen: HashSet<&String> = HashSet::new();
+        for (field_name, field_expr) in fields {
+            let found = self.eval_expr_type(field_expr, scope, errors);
+            match decl_fields.get(field_name) {
+                None => errors.push(TypeError::UnknownField {
+                    struct_name: format!("{}::{}", enum_name, variant),
+                    field: field_name.clone(),
+                }),
+                Some(expected) => {
+                    if !seen.insert(field_name) {
+                        errors.push(TypeError::DuplicateField(field_name.clone()));
+                    }
+                    if let Some(found) = found {
+                        if found != *expected {
+                            errors.push(TypeError::Mismatch {
+                                expected: expected.name(),
+                                found: found.name(),
+                                context: format!("field `{}` of `{}::{}`", field_name, enum_name, variant),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        for decl_field_name in decl_fields.keys() {
+            if !seen.contains(decl_field_name) {
+                errors.push(TypeError::MissingField {
+                    struct_name: format!("{}::{}", enum_name, variant),
+                    field: decl_field_name.clone(),
+                });
+            }
+        }
+
+        Some(Type::Enum(enum_name.to_string()))
     }
 }
 
@@ -532,5 +627,32 @@ mod tests {
     fn catches_undefined_type_in_param() {
         let err = check("fn f(x: Ghost) {}\nfn main() {}").unwrap_err();
         assert!(err.iter().any(|e| matches!(e, TypeError::UndefinedType(_))));
+    }
+
+    #[test]
+    fn passes_valid_enum_construction() {
+        let source = r#"
+            enum Status { Pending, Failed(reason: String) }
+            fn main() {
+                a := Status::Pending
+                b := Status::Failed(reason: "x")
+            }
+        "#;
+        assert_eq!(check(source), Ok(()));
+    }
+
+    #[test]
+    fn catches_undefined_variant() {
+        let source = "enum Status { Pending }\nfn main() { s := Status::Ghost }";
+        let err = check(source).unwrap_err();
+        assert!(err.iter().any(|e| matches!(e, TypeError::UndefinedVariant { .. })));
+    }
+
+    #[test]
+    fn catches_variant_field_type_mismatch() {
+        let source =
+            "enum Status { Failed(reason: String) }\nfn main() { s := Status::Failed(reason: 5) }";
+        let err = check(source).unwrap_err();
+        assert!(err.iter().any(|e| matches!(e, TypeError::Mismatch { .. })));
     }
 }
