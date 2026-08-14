@@ -13,6 +13,12 @@ pub enum Value {
         name: String,
         fields: HashMap<String, Value>,
     },
+
+    Enum {
+        enum_name: String,
+        variant: String,
+        fields: HashMap<String, Value>,
+    },
 }
 
 impl Value {
@@ -34,6 +40,19 @@ impl Value {
                     .collect();
                 format!("{} {{ {} }}", name, parts.join(", "))
             }
+            Value::Enum { enum_name, variant, fields } => {
+                if fields.is_empty() {
+                    format!("{}::{}", enum_name, variant)
+                } else {
+                    let mut names: Vec<&String> = fields.keys().collect();
+                    names.sort();
+                    let parts: Vec<String> = names
+                        .iter()
+                        .map(|n| format!("{}: {}", n, fields[*n].display()))
+                        .collect();
+                    format!("{}::{}({})", enum_name, variant, parts.join(", "))
+                }
+            }
         }
     }
 
@@ -45,6 +64,7 @@ impl Value {
             Value::Bool(_) => "Bool".to_string(),
             Value::Unit => "Unit".to_string(),
             Value::Struct { name, .. } => name.clone(),
+            Value::Enum { enum_name, .. } => enum_name.clone(),
         }
     }
 }
