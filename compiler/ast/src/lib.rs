@@ -12,12 +12,27 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
     pub structs: Vec<StructDecl>,
+    pub enums: Vec<EnumDecl>,
     pub functions: Vec<FunctionDecl>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StructDecl {
     pub name: String,
+    pub fields: Vec<Param>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnumDecl {
+    pub name: String,
+    pub variants: Vec<EnumVariant>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnumVariant {
+    pub name: String,
+    /// Empty for a unit variant (`Pending`); populated for a data
+    /// variant (`Failed(reason: String)`).
     pub fields: Vec<Param>,
 }
 
@@ -80,6 +95,12 @@ pub enum Expr {
     /// `Name { field: <expr>, ... }`
     StructLiteral {
         name: String,
+        fields: Vec<(String, Expr)>,
+    },
+    /// `EnumName::Variant` or `EnumName::Variant(field: <expr>, ...)`
+    EnumLiteral {
+        enum_name: String,
+        variant: String,
         fields: Vec<(String, Expr)>,
     },
     /// `<expr>.field`
