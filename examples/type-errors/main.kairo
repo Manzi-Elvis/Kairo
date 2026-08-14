@@ -1,0 +1,5 @@
+// Intentionally invalid — demonstrates `kairo check` catching a
+// type error without running anything. Not part of the test suite.
+fn main() {
+    x := 5 + true
+}
