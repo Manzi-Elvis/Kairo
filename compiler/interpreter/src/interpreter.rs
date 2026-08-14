@@ -1,4 +1,4 @@
-use kairo_ast::{BinaryOp, EnumDecl, Expr, FunctionDecl, Program, Stmt, StructDecl};
+use kairo_ast::{BinaryOp, EnumDecl, Expr, FunctionDecl, MatchArm, Pattern, Program, Stmt, StructDecl};
 use std::collections::HashMap;
 
 use crate::value::Value;
@@ -15,6 +15,7 @@ pub enum RuntimeError {
     ImmutableAssignment(String),
     StructError(String),
     EnumError(String),
+    NonExhaustiveMatch,
 }
 
 /// A variable binding: its current value plus whether `=` may update it.
@@ -131,12 +132,61 @@ impl<'a> Interpreter<'a> {
                 }
                 Ok(ControlFlow::Normal)
             }
+            Stmt::Match { scrutinee, arms} => self.exec_match(scrutinee, arms),
             Stmt::Return(expr) => {
                 let value = match expr {
                     Some(e) => self.eval_expr(e)?,
                     None => Value::Unit,
                 };
                 Ok(ControlFlow::Return(value))
+            }
+        }
+    }
+
+    fn exec_match(
+        &mut self,
+        scrutinee: &Expr,
+        arms: &[MatchArm],
+    ) -> Result<ControlFlow, RuntimeError> {
+        let value = self.eval_expr(scrutinee)?;
+        for arm in arms {
+            if let Some(bindings) = self.match_pattern(&arm.pattern, &value) {
+                for (name, val) in bindings {
+                    self.env.insert(name, Binding { value: val, is_mutable: false });
+                }
+                return self.exec_block(&arm.body);
+            }
+        }
+        Err(RuntimeError::NonExhaustiveMatch)
+    }
+
+    /// Returns `Some(bindings)` if the pattern matches, `None` otherwise.
+    /// No error path: an unreachable mismatch (e.g. wrong binding
+    /// count) just fails to match rather than panicking, since the
+    /// type checker is the real enforcement point.
+    fn match_pattern(&self, pattern: &Pattern, value: &Value) -> Option<Vec<(String, Value)>> {
+        match pattern {
+            Pattern::Wildcard => Some(Vec::new()),
+            Pattern::IntLiteral(i) => (*value == Value::Int(*i)).then(Vec::new),
+            Pattern::BoolLiteral(b) => (*value == Value::Bool(*b)).then(Vec::new),
+            Pattern::StringLiteral(s) => (*value == Value::String(s.clone())).then(Vec::new),
+            Pattern::EnumVariant { enum_name, variant, bindings } => {
+                let Value::Enum { enum_name: vn, variant: vv, fields } = value else {
+                    return None;
+                };
+                if vn != enum_name || vv != variant {
+                    return None;
+                }
+                let decl = self.enums.get(enum_name)?;
+                let variant_decl = decl.variants.iter().find(|v| &v.name == variant)?;
+                if bindings.len() != variant_decl.fields.len() {
+                    return None;
+                }
+                let mut out = Vec::new();
+                for (binding_name, field) in bindings.iter().zip(variant_decl.fields.iter()) {
+                    out.push((binding_name.clone(), fields.get(&field.name)?.clone()));
+                }
+                Some(out)
             }
         }
     }
@@ -856,5 +906,63 @@ mod tests {
             RuntimeError::EnumError(_) => {}
             other => panic!("expected EnumError, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn matches_enum_variant_and_binds_data() {
+        let source = r#"
+            enum Status { Pending, Failed(reason: String) }
+            fn main() {
+                s := Status::Failed(reason: "timeout")
+                match s {
+                    Status::Pending => { print("pending") }
+                    Status::Failed(reason) => { print(reason) }
+                }
+            }
+        "#;
+        assert_eq!(run_and_capture(source).unwrap(), vec!["timeout".to_string()]);
+    }
+
+    #[test]
+    fn matches_wildcard_fallback() {
+        let source = r#"
+            enum Status { Pending, Done }
+            fn main() {
+                s := Status::Pending
+                match s {
+                    Status::Done => { print("done") }
+                    _ => { print("other") }
+                }
+            }
+        "#;
+        assert_eq!(run_and_capture(source).unwrap(), vec!["other".to_string()]);
+    }
+
+    #[test]
+    fn matches_int_literal_pattern() {
+        let source = r#"
+            fn main() {
+                x := 5
+                match x {
+                    5 => { print("five") }
+                    _ => { print("other") }
+                }
+            }
+        "#;
+        assert_eq!(run_and_capture(source).unwrap(), vec!["five".to_string()]);
+    }
+
+    #[test]
+    fn reports_non_exhaustive_match_at_runtime() {
+        let source = r#"
+            enum Status { Pending, Done }
+            fn main() {
+                s := Status::Pending
+                match s {
+                    Status::Done => { print("done") }
+                }
+            }
+        "#;
+        assert_eq!(run_and_capture(source).unwrap_err(), RuntimeError::NonExhaustiveMatch);
     }
 }

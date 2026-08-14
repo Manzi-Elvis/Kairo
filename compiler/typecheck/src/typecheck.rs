@@ -1,4 +1,4 @@
-use kairo_ast::{BinaryOp, EnumDecl, Expr, FunctionDecl, Program, Stmt, StructDecl};
+use kairo_ast::{BinaryOp, EnumDecl, Expr, FunctionDecl, MatchArm, Pattern, Program, Stmt, StructDecl};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,6 +41,7 @@ pub enum TypeError {
     NoMainFunction,
     UndefinedEnum(String),
     UndefinedVariant { enum_name: String, variant: String },
+    NonExhaustiveMatch(String),
 }
 
 struct FunctionSig {
@@ -52,7 +53,7 @@ pub struct TypeChecker {
     struct_names: HashSet<String>,
     struct_fields: HashMap<String, HashMap<String, Type>>,
     enum_names: HashSet<String>,
-    enum_variants: HashMap<String, HashMap<String, HashMap<String, Type>>>,
+    enum_variants: HashMap<String, HashMap<String, Vec<(String, Type)>>>,
     functions: HashMap<String, FunctionSig>,
 }
 
@@ -127,10 +128,10 @@ impl TypeChecker {
     fn collect_enum_variants(&mut self, e: &EnumDecl, errors: &mut Vec<TypeError>) {
         let mut variants = HashMap::new();
         for v in &e.variants {
-            let mut fields = HashMap::new();
+            let mut fields = Vec::new();
             for field in &v.fields {
                 match self.resolve_type(&field.type_name) {
-                    Some(t) => { fields.insert(field.name.clone(), t); }
+                    Some(t) => fields.push((field.name.clone(), t)),
                     None => errors.push(TypeError::UndefinedType(field.type_name.clone())),
                 }
             }
@@ -175,7 +176,7 @@ impl TypeChecker {
         }
     }
 
-    fn check_stmt(
+        fn check_stmt(
         &self,
         stmt: &Stmt,
         scope: &mut HashMap<String, (Type, bool)>,
@@ -187,15 +188,22 @@ impl TypeChecker {
                 if scope.contains_key(name) {
                     errors.push(TypeError::AlreadyDeclared(name.clone()));
                 }
+
                 if let Some(t) = self.eval_expr_type(value, scope, errors) {
                     scope.insert(name.clone(), (t, *is_mutable));
                 }
             }
+
             Stmt::Assign { name, value } => {
                 let value_type = self.eval_expr_type(value, scope, errors);
+
                 match scope.get(name) {
                     None => errors.push(TypeError::UndefinedVariable(name.clone())),
-                    Some((_, false)) => errors.push(TypeError::ImmutableAssignment(name.clone())),
+
+                    Some((_, false)) => {
+                        errors.push(TypeError::ImmutableAssignment(name.clone()));
+                    }
+
                     Some((declared, true)) => {
                         if let Some(found) = value_type {
                             if found != *declared {
@@ -209,31 +217,75 @@ impl TypeChecker {
                     }
                 }
             }
+
             Stmt::Expr(expr) => {
                 self.eval_expr_type(expr, scope, errors);
             }
-            Stmt::If { condition, then_branch, else_branch } => {
+
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
                 self.check_condition(condition, scope, errors);
+
                 for s in then_branch {
                     self.check_stmt(s, scope, return_type, errors);
                 }
+
                 if let Some(else_stmts) = else_branch {
                     for s in else_stmts {
                         self.check_stmt(s, scope, return_type, errors);
                     }
                 }
             }
+
             Stmt::While { condition, body } => {
                 self.check_condition(condition, scope, errors);
+
                 for s in body {
                     self.check_stmt(s, scope, return_type, errors);
                 }
             }
+
+            Stmt::Match { scrutinee, arms } => {
+                if let Some(scrutinee_type) =
+                    self.eval_expr_type(scrutinee, scope, errors)
+                {
+                    for arm in arms {
+                        let mut arm_scope = scope.clone();
+
+                        self.check_pattern(
+                            &arm.pattern,
+                            &scrutinee_type,
+                            &mut arm_scope,
+                            errors,
+                        );
+
+                        for s in &arm.body {
+                            self.check_stmt(
+                                s,
+                                &mut arm_scope,
+                                return_type,
+                                errors,
+                            );
+                        }
+                    }
+
+                    self.check_exhaustiveness(
+                        &scrutinee_type,
+                        arms,
+                        errors,
+                    );
+                }
+            }
+
             Stmt::Return(expr) => {
                 let found = match expr {
                     Some(e) => self.eval_expr_type(e, scope, errors),
                     None => Some(Type::Unit),
                 };
+
                 if let Some(found) = found {
                     if found != *return_type {
                         errors.push(TypeError::Mismatch {
@@ -243,6 +295,153 @@ impl TypeChecker {
                         });
                     }
                 }
+            }
+        }
+    }
+
+         fn check_pattern(
+        &self,
+        pattern: &Pattern,
+        scrutinee_type: &Type,
+        scope: &mut HashMap<String, (Type, bool)>,
+        errors: &mut Vec<TypeError>,
+    ) {
+        match pattern {
+            Pattern::Wildcard => {}
+
+            Pattern::IntLiteral(_) => {
+                if *scrutinee_type != Type::Int {
+                    errors.push(TypeError::Mismatch {
+                        expected: scrutinee_type.name(),
+                        found: "Int".to_string(),
+                        context: "match pattern".to_string(),
+                    });
+                }
+            }
+
+            Pattern::BoolLiteral(_) => {
+                if *scrutinee_type != Type::Bool {
+                    errors.push(TypeError::Mismatch {
+                        expected: scrutinee_type.name(),
+                        found: "Bool".to_string(),
+                        context: "match pattern".to_string(),
+                    });
+                }
+            }
+
+            Pattern::StringLiteral(_) => {
+                if *scrutinee_type != Type::String {
+                    errors.push(TypeError::Mismatch {
+                        expected: scrutinee_type.name(),
+                        found: "String".to_string(),
+                        context: "match pattern".to_string(),
+                    });
+                }
+            }
+
+            Pattern::EnumVariant {
+                enum_name,
+                variant,
+                bindings,
+            } => match scrutinee_type {
+                Type::Enum(n) if n == enum_name => {
+                    let Some(fields) = self
+                        .enum_variants
+                        .get(enum_name)
+                        .and_then(|v| v.get(variant))
+                    else {
+                        errors.push(TypeError::UndefinedVariant {
+                            enum_name: enum_name.clone(),
+                            variant: variant.clone(),
+                        });
+                        return;
+                    };
+
+                    if bindings.len() != fields.len() {
+                        errors.push(TypeError::WrongArgCount {
+                            callee: format!("{}::{}", enum_name, variant),
+                            expected: fields.len(),
+                            found: bindings.len(),
+                        });
+                        return;
+                    }
+
+                    for (binding_name, (_, field_type)) in
+                        bindings.iter().zip(fields.iter())
+                    {
+                        scope.insert(
+                            binding_name.clone(),
+                            (field_type.clone(), false),
+                        );
+                    }
+                }
+
+                other => {
+                    errors.push(TypeError::Mismatch {
+                        expected: other.name(),
+                        found: format!("{}::{}", enum_name, variant),
+                        context: "match pattern".to_string(),
+                    });
+                }
+            },
+        }
+    }
+
+    fn check_exhaustiveness(
+        &self,
+        scrutinee_type: &Type,
+        arms: &[MatchArm],
+        errors: &mut Vec<TypeError>,
+    ) {
+        if arms
+            .iter()
+            .any(|a| matches!(a.pattern, Pattern::Wildcard))
+        {
+            return;
+        }
+
+        match scrutinee_type {
+            Type::Enum(name) => {
+                if let Some(variants) = self.enum_variants.get(name) {
+                    let covered: HashSet<&String> = arms
+                        .iter()
+                        .filter_map(|a| match &a.pattern {
+                            Pattern::EnumVariant { variant, .. } => Some(variant),
+                            _ => None,
+                        })
+                        .collect();
+
+                    for variant_name in variants.keys() {
+                        if !covered.contains(variant_name) {
+                            errors.push(TypeError::NonExhaustiveMatch(
+                                format!("{}::{}", name, variant_name),
+                            ));
+                        }
+                    }
+                }
+            }
+
+            Type::Bool => {
+                let covered: HashSet<bool> = arms
+                    .iter()
+                    .filter_map(|a| match &a.pattern {
+                        Pattern::BoolLiteral(b) => Some(*b),
+                        _ => None,
+                    })
+                    .collect();
+
+                if !covered.contains(&true) || !covered.contains(&false) {
+                    errors.push(TypeError::NonExhaustiveMatch(
+                        "Bool (missing true, false, or a wildcard `_`)"
+                            .to_string(),
+                    ));
+                }
+            }
+
+            other => {
+                errors.push(TypeError::NonExhaustiveMatch(
+                    format!("{} requires a wildcard `_` arm", other.name()),
+                ));
             }
         }
     }
@@ -496,12 +695,12 @@ impl TypeChecker {
         let mut seen: HashSet<&String> = HashSet::new();
         for (field_name, field_expr) in fields {
             let found = self.eval_expr_type(field_expr, scope, errors);
-            match decl_fields.get(field_name) {
+            match decl_fields.iter().find(|(n, _)| n == field_name) {
                 None => errors.push(TypeError::UnknownField {
                     struct_name: format!("{}::{}", enum_name, variant),
                     field: field_name.clone(),
                 }),
-                Some(expected) => {
+                Some((_, expected)) => {
                     if !seen.insert(field_name) {
                         errors.push(TypeError::DuplicateField(field_name.clone()));
                     }
@@ -517,7 +716,7 @@ impl TypeChecker {
                 }
             }
         }
-        for decl_field_name in decl_fields.keys() {
+        for (decl_field_name, _) in decl_fields {
             if !seen.contains(decl_field_name) {
                 errors.push(TypeError::MissingField {
                     struct_name: format!("{}::{}", enum_name, variant),
@@ -652,6 +851,79 @@ mod tests {
     fn catches_variant_field_type_mismatch() {
         let source =
             "enum Status { Failed(reason: String) }\nfn main() { s := Status::Failed(reason: 5) }";
+        let err = check(source).unwrap_err();
+        assert!(err.iter().any(|e| matches!(e, TypeError::Mismatch { .. })));
+    }
+
+    #[test]
+    fn passes_exhaustive_enum_match() {
+        let source = r#"
+            enum Status { Pending, Done }
+            fn main() {
+                s := Status::Pending
+                match s {
+                    Status::Pending => { print("p") }
+                    Status::Done => { print("d") }
+                }
+            }
+        "#;
+        assert_eq!(check(source), Ok(()));
+    }
+
+    #[test]
+    fn catches_non_exhaustive_enum_match() {
+        let source = r#"
+            enum Status { Pending, Done }
+            fn main() {
+                s := Status::Pending
+                match s {
+                    Status::Pending => { print("p") }
+                }
+            }
+        "#;
+        let err = check(source).unwrap_err();
+        assert!(err.iter().any(|e| matches!(e, TypeError::NonExhaustiveMatch(_))));
+    }
+
+    #[test]
+    fn wildcard_satisfies_exhaustiveness() {
+        let source = r#"
+            enum Status { Pending, Done }
+            fn main() {
+                s := Status::Pending
+                match s {
+                    Status::Pending => { print("p") }
+                    _ => { print("other") }
+                }
+            }
+        "#;
+        assert_eq!(check(source), Ok(()));
+    }
+
+    #[test]
+    fn catches_int_match_without_wildcard() {
+        let source = "fn main() { x := 5\nmatch x { 1 => { print(\"one\") } } }";
+        let err = check(source).unwrap_err();
+        assert!(err.iter().any(|e| matches!(e, TypeError::NonExhaustiveMatch(_))));
+    }
+
+    #[test]
+    fn binds_enum_field_type_correctly() {
+        let source = r#"
+            enum Status { Failed(reason: String) }
+            fn main() {
+                s := Status::Failed(reason: "x")
+                match s {
+                    Status::Failed(reason) => { print(reason) }
+                }
+            }
+        "#;
+        assert_eq!(check(source), Ok(()));
+    }
+
+    #[test]
+    fn catches_pattern_type_mismatch() {
+        let source = "fn main() { x := 5\nmatch x { true => { print(\"t\") } _ => { print(\"o\") } } }";
         let err = check(source).unwrap_err();
         assert!(err.iter().any(|e| matches!(e, TypeError::Mismatch { .. })));
     }

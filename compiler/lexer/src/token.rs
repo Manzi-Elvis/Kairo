@@ -13,6 +13,7 @@ pub enum TokenKind {
     True,
     False,
     Enum,
+    Match,
 
     // Literals
     Identifier(String),
@@ -30,6 +31,7 @@ pub enum TokenKind {
     Dot,      // .
     Arrow,    // ->
     ColonEq,  // :=
+    FatArrow,   // =>
     Eq,       // =
     Plus,     // +
     Minus,    // -
