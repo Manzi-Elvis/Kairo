@@ -1,6 +1,7 @@
 use std::env;
 use std::fs;
 use std::process::ExitCode;
+use kairo_typecheck::TypeChecker;
 
 use kairo_interpreter::Interpreter;
 use kairo_lexer::Lexer;
@@ -104,6 +105,14 @@ fn compile(source: &str) -> Result<kairo_ast::Program, String> {
     let program = Parser::new(tokens)
         .parse_program()
         .map_err(|e| format!("parse error: {e:?}"))?;
+
+    TypeChecker::new().check_program(&program).map_err(|errors| {
+        errors
+            .iter()
+            .map(|e| format!("type error: {e:?}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    })?;
 
     Ok(program)
 }
