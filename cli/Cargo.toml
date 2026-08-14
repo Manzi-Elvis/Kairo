@@ -15,3 +15,4 @@ kairo-ast = { path = "../compiler/ast" }
 kairo-lexer = { path = "../compiler/lexer" }
 kairo-parser = { path = "../compiler/parser" }
 kairo-interpreter = { path = "../compiler/interpreter" }
+kairo-typecheck = { path = "../compiler/typecheck" }
