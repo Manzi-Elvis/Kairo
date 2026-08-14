@@ -48,6 +48,27 @@ pub struct FunctionDecl {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MatchArm {
+    pub pattern: Pattern,
+    pub body: Vec<Stmt>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Pattern {
+    Wildcard,
+    IntLiteral(i64),
+    BoolLiteral(bool),
+    StringLiteral(String),
+    /// Bindings are positional — matched against the variant's
+    /// declared field order, not by name.
+    EnumVariant {
+        enum_name: String,
+        variant: String,
+        bindings: Vec<String>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Param {
     pub name: String,
     pub type_name: String,
@@ -73,6 +94,8 @@ pub enum Stmt {
     },
     /// `while <cond> { ... }`
     While { condition: Expr, body: Vec<Stmt> },
+    /// `match <expr> { pattern => { ... }, ... }`
+    Match { scrutinee: Expr, arms: Vec<MatchArm> },
     /// `return <expr>` or bare `return`
     Return(Option<Expr>),
 }
