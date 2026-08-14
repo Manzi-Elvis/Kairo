@@ -1,4 +1,4 @@
-use kairo_ast::{BinaryOp, Expr, FunctionDecl, Param, Program, Stmt};
+use kairo_ast::{BinaryOp, Expr, FunctionDecl, Param, Program, Stmt, StructDecl};
 use kairo_lexer::{Span, Token, TokenKind};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,19 +16,57 @@ pub enum ParseError {
 pub struct Parser {
     tokens: Vec<Token>,
     pos: usize,
+    /// Struct literals (`Name { ... }`) are ambiguous with an if/while
+    /// block opening right after a bare identifier condition — Rust
+    /// has the same problem and resolves it the same way: disallow
+    /// struct literals directly inside if/while conditions, and turn
+    /// the allowance back on inside any bracketed context (parens,
+    /// call args, struct-literal field values) where it's unambiguous.
+    allow_struct_literal: bool,
 }
 
 impl Parser {
     pub fn new(tokens: Vec<Token>) -> Self {
-        Self { tokens, pos: 0 }
+        Self {
+            tokens,
+            pos: 0,
+            allow_struct_literal: true,
+        }
     }
 
     pub fn parse_program(mut self) -> Result<Program, ParseError> {
+        let mut structs = Vec::new();
         let mut functions = Vec::new();
         while !self.check(&TokenKind::Eof) {
-            functions.push(self.parse_function_decl()?);
+            if self.check(&TokenKind::Struct) {
+                structs.push(self.parse_struct_decl()?);
+            } else {
+                functions.push(self.parse_function_decl()?);
+            }
         }
-        Ok(Program { functions })
+        Ok(Program { structs, functions })
+    }
+
+    fn parse_struct_decl(&mut self) -> Result<StructDecl, ParseError> {
+        self.expect(&TokenKind::Struct, "struct")?;
+        let name = self.expect_identifier()?;
+        self.expect(&TokenKind::LBrace, "{")?;
+        let fields = self.parse_struct_fields()?;
+        self.expect(&TokenKind::RBrace, "}")?;
+        Ok(StructDecl { name, fields })
+    }
+
+    fn parse_struct_fields(&mut self) -> Result<Vec<Param>, ParseError> {
+        let mut fields = Vec::new();
+        if self.check(&TokenKind::RBrace) {
+            return Ok(fields);
+        }
+        fields.push(self.parse_param()?);
+        while self.check(&TokenKind::Comma) {
+            self.advance();
+            fields.push(self.parse_param()?);
+        }
+        Ok(fields)
     }
 
     fn parse_function_decl(&mut self) -> Result<FunctionDecl, ParseError> {
@@ -152,7 +190,7 @@ impl Parser {
 
     fn parse_if_stmt(&mut self) -> Result<Stmt, ParseError> {
         self.expect(&TokenKind::If, "if")?;
-        let condition = self.parse_expr()?;
+        let condition = self.parse_condition()?;
         self.expect(&TokenKind::LBrace, "{")?;
         let then_branch = self.parse_block_stmts()?;
         self.expect(&TokenKind::RBrace, "}")?;
@@ -176,12 +214,23 @@ impl Parser {
 
     fn parse_while_stmt(&mut self) -> Result<Stmt, ParseError> {
         self.expect(&TokenKind::While, "while")?;
-        let condition = self.parse_expr()?;
+        let condition = self.parse_condition()?;
         self.expect(&TokenKind::LBrace, "{")?;
         let body = self.parse_block_stmts()?;
         self.expect(&TokenKind::RBrace, "}")?;
 
         Ok(Stmt::While { condition, body })
+    }
+
+    /// Parses an expression with struct literals disallowed at the
+    /// top level, for use as an if/while condition. See the
+    /// `allow_struct_literal` doc comment on `Parser`.
+    fn parse_condition(&mut self) -> Result<Expr, ParseError> {
+        let prev = self.allow_struct_literal;
+        self.allow_struct_literal = false;
+        let condition = self.parse_expr();
+        self.allow_struct_literal = prev;
+        condition
     }
 
     // --- expression parsing, lowest to highest precedence ---
@@ -238,7 +287,7 @@ impl Parser {
     }
 
     fn parse_factor(&mut self) -> Result<Expr, ParseError> {
-        let mut left = self.parse_primary()?;
+        let mut left = self.parse_postfix()?;
         loop {
             let op = match self.peek_kind() {
                 TokenKind::Star => BinaryOp::Mul,
@@ -246,17 +295,33 @@ impl Parser {
                 _ => break,
             };
             self.advance();
-            let right = self.parse_primary()?;
+            let right = self.parse_postfix()?;
             left = Expr::Binary { left: Box::new(left), op, right: Box::new(right) };
         }
         Ok(left)
+    }
+
+    /// Applies postfix field access (`.field`, chainable) on top of
+    /// a primary expression: `a.b.c` parses as
+    /// `FieldAccess(FieldAccess(a, b), c)`.
+    fn parse_postfix(&mut self) -> Result<Expr, ParseError> {
+        let mut expr = self.parse_primary()?;
+        while self.check(&TokenKind::Dot) {
+            self.advance();
+            let field = self.expect_identifier()?;
+            expr = Expr::FieldAccess { object: Box::new(expr), field };
+        }
+        Ok(expr)
     }
 
     fn parse_primary(&mut self) -> Result<Expr, ParseError> {
         match self.peek_kind().clone() {
             TokenKind::LParen => {
                 self.advance();
+                let prev = self.allow_struct_literal;
+                self.allow_struct_literal = true;
                 let inner = self.parse_expr()?;
+                self.allow_struct_literal = prev;
                 self.expect(&TokenKind::RParen, ")")?;
                 Ok(inner)
             }
@@ -283,6 +348,8 @@ impl Parser {
                     let args = self.parse_call_args()?;
                     self.expect(&TokenKind::RParen, ")")?;
                     Ok(Expr::Call { callee: name, args })
+                } else if self.check(&TokenKind::LBrace) && self.allow_struct_literal {
+                    self.parse_struct_literal(name)
                 } else {
                     Ok(Expr::Identifier(name))
                 }
@@ -295,16 +362,46 @@ impl Parser {
         }
     }
 
+    fn parse_struct_literal(&mut self, name: String) -> Result<Expr, ParseError> {
+        self.expect(&TokenKind::LBrace, "{")?;
+        let prev = self.allow_struct_literal;
+        self.allow_struct_literal = true;
+
+        let mut fields = Vec::new();
+        if !self.check(&TokenKind::RBrace) {
+            fields.push(self.parse_struct_literal_field()?);
+            while self.check(&TokenKind::Comma) {
+                self.advance();
+                fields.push(self.parse_struct_literal_field()?);
+            }
+        }
+
+        self.allow_struct_literal = prev;
+        self.expect(&TokenKind::RBrace, "}")?;
+        Ok(Expr::StructLiteral { name, fields })
+    }
+
+    fn parse_struct_literal_field(&mut self) -> Result<(String, Expr), ParseError> {
+        let field_name = self.expect_identifier()?;
+        self.expect(&TokenKind::Colon, ":")?;
+        let value = self.parse_expr()?;
+        Ok((field_name, value))
+    }
+
     fn parse_call_args(&mut self) -> Result<Vec<Expr>, ParseError> {
+        let prev = self.allow_struct_literal;
+        self.allow_struct_literal = true;
+
         let mut args = Vec::new();
-        if self.check(&TokenKind::RParen) {
-            return Ok(args);
-        }
-        args.push(self.parse_expr()?);
-        while self.check(&TokenKind::Comma) {
-            self.advance();
+        if !self.check(&TokenKind::RParen) {
             args.push(self.parse_expr()?);
+            while self.check(&TokenKind::Comma) {
+                self.advance();
+                args.push(self.parse_expr()?);
+            }
         }
+
+        self.allow_struct_literal = prev;
         Ok(args)
     }
 
@@ -608,6 +705,107 @@ mod tests {
             Expr::Call {
                 callee: "add".to_string(),
                 args: vec![Expr::IntLiteral(1), Expr::IntLiteral(2)],
+            }
+        );
+    }
+
+    #[test]
+    fn parses_struct_decl() {
+        let program = parse("struct Point { x: Int, y: Int }\nfn main() {}").unwrap();
+        assert_eq!(program.structs.len(), 1);
+        assert_eq!(program.structs[0].name, "Point");
+        assert_eq!(
+            program.structs[0].fields,
+            vec![
+                Param { name: "x".to_string(), type_name: "Int".to_string() },
+                Param { name: "y".to_string(), type_name: "Int".to_string() },
+            ]
+        );
+    }
+
+    #[test]
+    fn parses_struct_literal() {
+        let program = parse("fn main() { p := Point { x: 1, y: 2 } }").unwrap();
+        let Stmt::VariableDecl { value, .. } = &program.functions[0].body[0] else {
+            panic!("expected VariableDecl");
+        };
+        assert_eq!(
+            *value,
+            Expr::StructLiteral {
+                name: "Point".to_string(),
+                fields: vec![
+                    ("x".to_string(), Expr::IntLiteral(1)),
+                    ("y".to_string(), Expr::IntLiteral(2)),
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn parses_field_access() {
+        let program = parse("fn main() { print(p.x) }").unwrap();
+        let Stmt::Expr(Expr::Call { args, .. }) = &program.functions[0].body[0] else {
+            panic!("expected call expression statement");
+        };
+        assert_eq!(
+            args[0],
+            Expr::FieldAccess {
+                object: Box::new(Expr::Identifier("p".to_string())),
+                field: "x".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_chained_field_access() {
+        let program = parse("fn main() { print(a.b.c) }").unwrap();
+        let Stmt::Expr(Expr::Call { args, .. }) = &program.functions[0].body[0] else {
+            panic!("expected call expression statement");
+        };
+        assert_eq!(
+            args[0],
+            Expr::FieldAccess {
+                object: Box::new(Expr::FieldAccess {
+                    object: Box::new(Expr::Identifier("a".to_string())),
+                    field: "b".to_string(),
+                }),
+                field: "c".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn if_condition_does_not_misparse_as_struct_literal() {
+        // `if x { ... }`: the `{` must open the if-block, not a
+        // struct literal `x { ... }`.
+        let program = parse(r#"fn main() { if x { print("hi") } }"#).unwrap();
+        let Stmt::If { condition, then_branch, .. } = &program.functions[0].body[0] else {
+            panic!("expected If statement");
+        };
+        assert_eq!(*condition, Expr::Identifier("x".to_string()));
+        assert_eq!(then_branch.len(), 1);
+    }
+
+    #[test]
+    fn struct_literal_allowed_inside_call_args_within_if_condition() {
+        // Inside f(...), we're in an unambiguous bracketed context
+        // even though we're syntactically inside an if condition.
+        let program =
+            parse(r#"fn main() { if f(Point { x: 1, y: 2 }) { print("hi") } }"#).unwrap();
+        let Stmt::If { condition, .. } = &program.functions[0].body[0] else {
+            panic!("expected If statement");
+        };
+        assert_eq!(
+            *condition,
+            Expr::Call {
+                callee: "f".to_string(),
+                args: vec![Expr::StructLiteral {
+                    name: "Point".to_string(),
+                    fields: vec![
+                        ("x".to_string(), Expr::IntLiteral(1)),
+                        ("y".to_string(), Expr::IntLiteral(2)),
+                    ],
+                }],
             }
         );
     }

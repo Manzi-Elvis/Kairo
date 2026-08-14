@@ -1,4 +1,4 @@
-use kairo_ast::{BinaryOp, Expr, FunctionDecl, Program, Stmt};
+use kairo_ast::{BinaryOp, Expr, FunctionDecl, Program, Stmt, StructDecl};
 use std::collections::HashMap;
 
 use crate::value::Value;
@@ -13,6 +13,7 @@ pub enum RuntimeError {
     DivisionByZero,
     AlreadyDeclared(String),
     ImmutableAssignment(String),
+    StructError(String),
 }
 
 /// A variable binding: its current value plus whether `=` may update it.
@@ -32,6 +33,7 @@ enum ControlFlow {
 pub struct Interpreter<'a> {
     env: HashMap<String, Binding>,
     functions: HashMap<String, FunctionDecl>,
+    structs: HashMap<String, StructDecl>,
     print_sink: &'a mut dyn FnMut(&str),
 }
 
@@ -40,11 +42,15 @@ impl<'a> Interpreter<'a> {
         Self {
             env: HashMap::new(),
             functions: HashMap::new(),
+            structs: HashMap::new(),
             print_sink,
         }
     }
 
     pub fn run(&mut self, program: &Program) -> Result<(), RuntimeError> {
+        for s in &program.structs {
+            self.structs.insert(s.name.clone(), s.clone());
+        }
         for func in &program.functions {
             self.functions.insert(func.name.clone(), func.clone());
         }
@@ -158,7 +164,81 @@ impl<'a> Interpreter<'a> {
             }
 
             Expr::Call { callee, args } => self.call_function(callee, args),
+
+            Expr::StructLiteral { name, fields } => self.eval_struct_literal(name, fields),
+
+            Expr::FieldAccess { object, field } => {
+                match self.eval_expr(object)? {
+                    Value::Struct { name, fields } => {
+                        fields.get(field).cloned().ok_or_else(|| {
+                            RuntimeError::StructError(format!(
+                                "struct `{}` has no field `{}`",
+                                name, field
+                            ))
+                        })
+                    }
+                    other => Err(RuntimeError::TypeError(format!(
+                        "cannot access field `{}` on {}",
+                        field,
+                        other.type_name()
+                    ))),
+                }
+            }
         }
+    }
+
+    fn eval_struct_literal(
+        &mut self,
+        name: &str,
+        fields: &[(String, Expr)],
+    ) -> Result<Value, RuntimeError> {
+        let Some(decl) = self.structs.get(name).cloned() else {
+            return Err(RuntimeError::StructError(format!(
+                "undefined struct `{}`",
+                name
+            )));
+        };
+
+        if fields.len() != decl.fields.len() {
+            return Err(RuntimeError::StructError(format!(
+                "struct `{}` expects {} field(s), found {}",
+                name,
+                decl.fields.len(),
+                fields.len()
+            )));
+        }
+
+        let mut values: HashMap<String, Value> = HashMap::new();
+        for (field_name, field_expr) in fields {
+            if !decl.fields.iter().any(|f| &f.name == field_name) {
+                return Err(RuntimeError::StructError(format!(
+                    "struct `{}` has no field `{}`",
+                    name, field_name
+                )));
+            }
+            if values.contains_key(field_name) {
+                return Err(RuntimeError::StructError(format!(
+                    "field `{}` specified more than once",
+                    field_name
+                )));
+            }
+            let value = self.eval_expr(field_expr)?;
+            values.insert(field_name.clone(), value);
+        }
+
+        // The count check plus the uniqueness check above together
+        // guarantee an exact match against decl.fields, but we check
+        // explicitly for a clearer error message on the missing case.
+        for decl_field in &decl.fields {
+            if !values.contains_key(&decl_field.name) {
+                return Err(RuntimeError::StructError(format!(
+                    "missing field `{}` in struct `{}`",
+                    decl_field.name, name
+                )));
+            }
+        }
+
+        Ok(Value::Struct { name: name.to_string(), fields: values })
     }
 
     fn eval_binary(&self, op: BinaryOp, l: Value, r: Value) -> Result<Value, RuntimeError> {
@@ -567,5 +647,105 @@ mod tests {
                 found: 1,
             }
         );
+    }
+
+    #[test]
+    fn constructs_struct_and_accesses_fields() {
+        let source = r#"
+            struct Point {
+                x: Int,
+                y: Int
+            }
+
+            fn main() {
+                p := Point { x: 3, y: 4 }
+                print(p.x)
+                print(p.y)
+            }
+        "#;
+        assert_eq!(run_and_capture(source).unwrap(), vec!["3".to_string(), "4".to_string()]);
+    }
+
+    #[test]
+    fn struct_can_be_passed_to_and_returned_from_functions() {
+        let source = r#"
+            struct Point {
+                x: Int,
+                y: Int
+            }
+
+            fn getX(p: Point) -> Int {
+                return p.x
+            }
+
+            fn main() {
+                p := Point { x: 7, y: 8 }
+                print(getX(p))
+            }
+        "#;
+        assert_eq!(run_and_capture(source).unwrap(), vec!["7".to_string()]);
+    }
+
+    #[test]
+    fn reports_undefined_struct() {
+        let source = r#"
+            fn main() {
+                p := Ghost { x: 1 }
+            }
+        "#;
+        match run_and_capture(source).unwrap_err() {
+            RuntimeError::StructError(_) => {}
+            other => panic!("expected StructError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn reports_missing_struct_field() {
+        let source = r#"
+            struct Point {
+                x: Int,
+                y: Int
+            }
+
+            fn main() {
+                p := Point { x: 1 }
+            }
+        "#;
+        match run_and_capture(source).unwrap_err() {
+            RuntimeError::StructError(_) => {}
+            other => panic!("expected StructError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn reports_unknown_struct_field() {
+        let source = r#"
+            struct Point {
+                x: Int,
+                y: Int
+            }
+
+            fn main() {
+                p := Point { x: 1, y: 2, z: 3 }
+            }
+        "#;
+        match run_and_capture(source).unwrap_err() {
+            RuntimeError::StructError(_) => {}
+            other => panic!("expected StructError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn reports_field_access_on_non_struct() {
+        let source = r#"
+            fn main() {
+                x := 5
+                print(x.y)
+            }
+        "#;
+        match run_and_capture(source).unwrap_err() {
+            RuntimeError::TypeError(_) => {}
+            other => panic!("expected TypeError, got {other:?}"),
+        }
     }
 }
