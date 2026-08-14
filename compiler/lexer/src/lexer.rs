@@ -120,7 +120,9 @@ impl Lexer {
             "true" => TokenKind::True,
             "false" => TokenKind::False,
             "enum" => TokenKind::Enum,
+            "match" => TokenKind::Match,
             _ => TokenKind::Identifier(ident),
+            
         }
     }
 
@@ -195,10 +197,15 @@ impl Lexer {
                 Ok(TokenKind::GtEq)
             }
             '>' => Ok(TokenKind::Gt),
+            '=' if self.peek() == Some('>') => {
+                self.advance();
+                Ok(TokenKind::FatArrow)
+            }
             '=' if self.peek() == Some('=') => {
                 self.advance();
                 Ok(TokenKind::EqEq)
             }
+            '=' => Ok(TokenKind::Eq),
             '!' if self.peek() == Some('=') => {
                 self.advance();
                 Ok(TokenKind::NotEq)
@@ -212,7 +219,6 @@ impl Lexer {
                 Ok(TokenKind::ColonColon)
             }
             ':' => Ok(TokenKind::Colon),
-            '=' => Ok(TokenKind::Eq),
             other => Err(LexError::UnrecognizedChar {
                 ch: other,
                 line,
@@ -440,6 +446,25 @@ mod tests {
                 TokenKind::Identifier("Status".into()),
                 TokenKind::ColonColon,
                 TokenKind::Identifier("Pending".into()),
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn tokenizes_match_and_fat_arrow() {
+        let kinds = kinds("match x { _ => {} }");
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::Match,
+                TokenKind::Identifier("x".into()),
+                TokenKind::LBrace,
+                TokenKind::Identifier("_".into()),
+                TokenKind::FatArrow,
+                TokenKind::LBrace,
+                TokenKind::RBrace,
+                TokenKind::RBrace,
                 TokenKind::Eof,
             ]
         );
