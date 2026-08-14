@@ -1,0 +1,11 @@
+enum Status {
+    Pending,
+    Failed(reason: String)
+}
+
+fn main() {
+    a := Status::Pending
+    b := Status::Failed(reason: "timeout")
+    print(a)
+    print(b)
+}
