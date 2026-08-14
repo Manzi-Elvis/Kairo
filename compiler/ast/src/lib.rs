@@ -1,8 +1,9 @@
-//! AST node definitions for Kairo v0.5 milestone scope.
+//! AST node definitions for Kairo v0.6 milestone scope.
 //!
-//! Covers user-defined functions with typed parameters and an
-//! optional return type, return statements, mutable/immutable
-//! variable declarations, reassignment, string/int/bool literals,
+//! Covers struct declarations, struct literals, field access,
+//! user-defined functions with typed parameters and an optional
+//! return type, return statements, mutable/immutable variable
+//! declarations, reassignment, string/int/bool literals,
 //! arithmetic/comparison operators, calls with comma-separated
 //! arguments, if/else, while loops, and grouping expressions
 //! (grouping doesn't need its own node — it just controls parse
@@ -10,7 +11,14 @@
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
+    pub structs: Vec<StructDecl>,
     pub functions: Vec<FunctionDecl>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StructDecl {
+    pub name: String,
+    pub fields: Vec<Param>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,7 +26,8 @@ pub struct FunctionDecl {
     pub name: String,
     pub params: Vec<Param>,
     /// Parsed but not statically checked yet — no type-checker pass
-    /// exists until Phase 3. `None` means the function returns Unit.
+    /// exists until a dedicated type-checker slice. `None` means the
+    /// function returns Unit.
     pub return_type: Option<String>,
     pub body: Vec<Stmt>,
 }
@@ -68,6 +77,13 @@ pub enum Expr {
         callee: String,
         args: Vec<Expr>,
     },
+    /// `Name { field: <expr>, ... }`
+    StructLiteral {
+        name: String,
+        fields: Vec<(String, Expr)>,
+    },
+    /// `<expr>.field`
+    FieldAccess { object: Box<Expr>, field: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

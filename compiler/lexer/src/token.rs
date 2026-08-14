@@ -9,6 +9,7 @@ pub enum TokenKind {
     While,
     Mut,
     Return,
+    Struct,
     True,
     False,
 
@@ -24,6 +25,7 @@ pub enum TokenKind {
     RBrace,   // }
     Comma,    // ,
     Colon,    // :
+    Dot,      // .
     Arrow,    // ->
     ColonEq,  // :=
     Eq,       // =

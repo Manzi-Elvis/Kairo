@@ -89,3 +89,46 @@ fn name(param: Type, param2: Type) -> ReturnType { ... }
     parameters
 - Recursion is supported (functions can call themselves and each other)
 - Calling a function with the wrong number of arguments is a runtime error
+
+---
+
+# Kairo v0.6 additions: structs
+
+## New tokens
+- Keyword: `struct`
+- Punctuation: `.` (dot, for field access)
+
+## New top-level declaration
+
+```
+struct Name {
+field: Type,
+field2: Type
+}
+```
+
+Fields are comma-separated `name: Type` pairs (zero or more). This
+deviates from the spec's newline-separated example (section 14) —
+comma-separated matches the convention already used for function
+parameters, and no significant-whitespace handling exists in the
+lexer yet.
+
+## New expressions
+- `Name { field: <expr>, field2: <expr> }` — struct literal.
+  All declared fields must be supplied exactly once; unknown
+  or missing fields are errors.
+- `<expr>.field` — field access, chainable (`a.b.c`)
+
+## Ambiguity: struct literals in if/while conditions
+`if x { ... }` is ambiguous between "condition `x`, then a block"
+and "condition is the struct literal `x { ... }`". Kairo resolves
+this the same way Rust does: struct literals are **not** parsed
+directly inside `if`/`while` conditions. Wrap in parentheses if
+one is genuinely needed there: `if (x { ... }) { ... }`.
+
+## Explicitly deferred
+- Field mutation (`obj.field = value`) — structs are read-only
+  after construction for now; only whole-variable reassignment
+  via `=` (if the variable is `mut`) is possible
+- Struct methods
+- Generic structs

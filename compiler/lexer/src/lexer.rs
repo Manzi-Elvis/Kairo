@@ -116,6 +116,7 @@ impl Lexer {
             "while" => TokenKind::While,
             "mut" => TokenKind::Mut,
             "return" => TokenKind::Return,
+            "struct" => TokenKind::Struct,
             "true" => TokenKind::True,
             "false" => TokenKind::False,
             _ => TokenKind::Identifier(ident),
@@ -174,6 +175,7 @@ impl Lexer {
             '{' => Ok(TokenKind::LBrace),
             '}' => Ok(TokenKind::RBrace),
             ',' => Ok(TokenKind::Comma),
+            '.' => Ok(TokenKind::Dot),
             '+' => Ok(TokenKind::Plus),
             '-' if self.peek() == Some('>') => {
                 self.advance();
@@ -393,6 +395,27 @@ mod tests {
                 TokenKind::Return,
                 TokenKind::Identifier("a".into()),
                 TokenKind::RBrace,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn tokenizes_struct_and_field_access() {
+        let kinds = kinds("struct Point { x: Int } p.x");
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::Struct,
+                TokenKind::Identifier("Point".into()),
+                TokenKind::LBrace,
+                TokenKind::Identifier("x".into()),
+                TokenKind::Colon,
+                TokenKind::Identifier("Int".into()),
+                TokenKind::RBrace,
+                TokenKind::Identifier("p".into()),
+                TokenKind::Dot,
+                TokenKind::Identifier("x".into()),
                 TokenKind::Eof,
             ]
         );
