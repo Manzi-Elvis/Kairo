@@ -1,4 +1,4 @@
-use kairo_ast::{BinaryOp, Expr, FunctionDecl, Program, Stmt, StructDecl};
+use kairo_ast::{BinaryOp, EnumDecl, Expr, FunctionDecl, Program, Stmt, StructDecl};
 use std::collections::HashMap;
 
 use crate::value::Value;
@@ -14,6 +14,7 @@ pub enum RuntimeError {
     AlreadyDeclared(String),
     ImmutableAssignment(String),
     StructError(String),
+    EnumError(String),
 }
 
 /// A variable binding: its current value plus whether `=` may update it.
@@ -34,6 +35,7 @@ pub struct Interpreter<'a> {
     env: HashMap<String, Binding>,
     functions: HashMap<String, FunctionDecl>,
     structs: HashMap<String, StructDecl>,
+    enums: HashMap<String, EnumDecl>,
     print_sink: &'a mut dyn FnMut(&str),
 }
 
@@ -43,6 +45,7 @@ impl<'a> Interpreter<'a> {
             env: HashMap::new(),
             functions: HashMap::new(),
             structs: HashMap::new(),
+            enums: HashMap::new(),
             print_sink,
         }
     }
@@ -51,6 +54,11 @@ impl<'a> Interpreter<'a> {
         for s in &program.structs {
             self.structs.insert(s.name.clone(), s.clone());
         }
+
+        for e in &program.enums {
+            self.enums.insert(e.name.clone(), e.clone());
+        }
+
         for func in &program.functions {
             self.functions.insert(func.name.clone(), func.clone());
         }
@@ -167,6 +175,10 @@ impl<'a> Interpreter<'a> {
 
             Expr::StructLiteral { name, fields } => self.eval_struct_literal(name, fields),
 
+            Expr::EnumLiteral { enum_name, variant, fields } => {
+                self.eval_enum_literal(enum_name, variant, fields)
+            }
+
             Expr::FieldAccess { object, field } => {
                 match self.eval_expr(object)? {
                     Value::Struct { name, fields } => {
@@ -239,6 +251,62 @@ impl<'a> Interpreter<'a> {
         }
 
         Ok(Value::Struct { name: name.to_string(), fields: values })
+    }
+
+    fn eval_enum_literal(
+        &mut self,
+        enum_name: &str,
+        variant: &str,
+        fields: &[(String, Expr)],
+    ) -> Result<Value, RuntimeError> {
+        let Some(decl) = self.enums.get(enum_name).cloned() else {
+            return Err(RuntimeError::EnumError(format!("undefined enum `{}`", enum_name)));
+        };
+        let Some(variant_decl) = decl.variants.iter().find(|v| v.name == variant) else {
+            return Err(RuntimeError::EnumError(format!(
+                "enum `{}` has no variant `{}`",
+                enum_name, variant
+            )));
+        };
+
+        if fields.len() != variant_decl.fields.len() {
+            return Err(RuntimeError::EnumError(format!(
+                "variant `{}::{}` expects {} field(s), found {}",
+                enum_name, variant, variant_decl.fields.len(), fields.len()
+            )));
+        }
+
+        let mut values: HashMap<String, Value> = HashMap::new();
+        for (field_name, field_expr) in fields {
+            if !variant_decl.fields.iter().any(|f| &f.name == field_name) {
+                return Err(RuntimeError::EnumError(format!(
+                    "variant `{}::{}` has no field `{}`",
+                    enum_name, variant, field_name
+                )));
+            }
+            if values.contains_key(field_name) {
+                return Err(RuntimeError::EnumError(format!(
+                    "field `{}` specified more than once",
+                    field_name
+                )));
+            }
+            let value = self.eval_expr(field_expr)?;
+            values.insert(field_name.clone(), value);
+        }
+        for f in &variant_decl.fields {
+            if !values.contains_key(&f.name) {
+                return Err(RuntimeError::EnumError(format!(
+                    "missing field `{}` in variant `{}::{}`",
+                    f.name, enum_name, variant
+                )));
+            }
+        }
+
+        Ok(Value::Enum {
+            enum_name: enum_name.to_string(),
+            variant: variant.to_string(),
+            fields: values,
+        })
     }
 
     fn eval_binary(&self, op: BinaryOp, l: Value, r: Value) -> Result<Value, RuntimeError> {
@@ -746,6 +814,47 @@ mod tests {
         match run_and_capture(source).unwrap_err() {
             RuntimeError::TypeError(_) => {}
             other => panic!("expected TypeError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn constructs_unit_variant() {
+        let source = r#"
+            enum Status { Pending, Done }
+            fn main() {
+                s := Status::Pending
+                print(s)
+            }
+        "#;
+        assert_eq!(run_and_capture(source).unwrap(), vec!["Status::Pending".to_string()]);
+    }
+
+    #[test]
+    fn constructs_data_variant() {
+        let source = r#"
+            enum Status { Pending, Failed(reason: String) }
+            fn main() {
+                s := Status::Failed(reason: "timeout")
+                print(s)
+            }
+        "#;
+        assert_eq!(
+            run_and_capture(source).unwrap(),
+            vec!["Status::Failed(reason: timeout)".to_string()]
+        );
+    }
+
+    #[test]
+    fn reports_undefined_enum_variant() {
+        let source = r#"
+            enum Status { Pending }
+            fn main() {
+                s := Status::Ghost
+            }
+        "#;
+        match run_and_capture(source).unwrap_err() {
+            RuntimeError::EnumError(_) => {}
+            other => panic!("expected EnumError, got {other:?}"),
         }
     }
 }

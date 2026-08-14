@@ -1,5 +1,5 @@
-use kairo_ast::{BinaryOp, Expr, FunctionDecl, Param, Program, Stmt, StructDecl};
 use kairo_lexer::{Span, Token, TokenKind};
+use kairo_ast::{BinaryOp, EnumDecl, EnumVariant, Expr, FunctionDecl, Param, Program, Stmt, StructDecl};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParseError {
@@ -36,15 +36,18 @@ impl Parser {
 
     pub fn parse_program(mut self) -> Result<Program, ParseError> {
         let mut structs = Vec::new();
+        let mut enums = Vec::new();
         let mut functions = Vec::new();
         while !self.check(&TokenKind::Eof) {
             if self.check(&TokenKind::Struct) {
                 structs.push(self.parse_struct_decl()?);
+            } else if self.check(&TokenKind::Enum) {
+                enums.push(self.parse_enum_decl()?);
             } else {
                 functions.push(self.parse_function_decl()?);
             }
         }
-        Ok(Program { structs, functions })
+        Ok(Program { structs, enums, functions })
     }
 
     fn parse_struct_decl(&mut self) -> Result<StructDecl, ParseError> {
@@ -59,6 +62,53 @@ impl Parser {
     fn parse_struct_fields(&mut self) -> Result<Vec<Param>, ParseError> {
         let mut fields = Vec::new();
         if self.check(&TokenKind::RBrace) {
+            return Ok(fields);
+        }
+        fields.push(self.parse_param()?);
+        while self.check(&TokenKind::Comma) {
+            self.advance();
+            fields.push(self.parse_param()?);
+        }
+        Ok(fields)
+    }
+
+    fn parse_enum_decl(&mut self) -> Result<EnumDecl, ParseError> {
+        self.expect(&TokenKind::Enum, "enum")?;
+        let name = self.expect_identifier()?;
+        self.expect(&TokenKind::LBrace, "{")?;
+
+        let mut variants = Vec::new();
+        if !self.check(&TokenKind::RBrace) {
+            variants.push(self.parse_enum_variant()?);
+            while self.check(&TokenKind::Comma) {
+                self.advance();
+                if self.check(&TokenKind::RBrace) {
+                    break; // trailing comma
+                }
+                variants.push(self.parse_enum_variant()?);
+            }
+        }
+
+        self.expect(&TokenKind::RBrace, "}")?;
+        Ok(EnumDecl { name, variants })
+    }
+
+    fn parse_enum_variant(&mut self) -> Result<EnumVariant, ParseError> {
+        let name = self.expect_identifier()?;
+        let fields = if self.check(&TokenKind::LParen) {
+            self.advance();
+            let fields = self.parse_struct_fields_paren()?;
+            self.expect(&TokenKind::RParen, ")")?;
+            fields
+        } else {
+            Vec::new()
+        };
+        Ok(EnumVariant { name, fields })
+    }
+
+    fn parse_struct_fields_paren(&mut self) -> Result<Vec<Param>, ParseError> {
+        let mut fields = Vec::new();
+        if self.check(&TokenKind::RParen) {
             return Ok(fields);
         }
         fields.push(self.parse_param()?);
@@ -343,7 +393,22 @@ impl Parser {
             }
             TokenKind::Identifier(name) => {
                 self.advance();
-                if self.check(&TokenKind::LParen) {
+                if self.check(&TokenKind::ColonColon) {
+                    self.advance();
+                    let variant = self.expect_identifier()?;
+                    let fields = if self.check(&TokenKind::LParen) {
+                        self.advance();
+                        let prev = self.allow_struct_literal;
+                        self.allow_struct_literal = true;
+                        let fields = self.parse_struct_literal_fields()?;
+                        self.allow_struct_literal = prev;
+                        self.expect(&TokenKind::RParen, ")")?;
+                        fields
+                    } else {
+                        Vec::new()
+                    };
+                    Ok(Expr::EnumLiteral { enum_name: name, variant, fields })
+                } else if self.check(&TokenKind::LParen) {
                     self.advance();
                     let args = self.parse_call_args()?;
                     self.expect(&TokenKind::RParen, ")")?;
@@ -366,19 +431,22 @@ impl Parser {
         self.expect(&TokenKind::LBrace, "{")?;
         let prev = self.allow_struct_literal;
         self.allow_struct_literal = true;
+        let fields = self.parse_struct_literal_fields()?;
+        self.allow_struct_literal = prev;
+        self.expect(&TokenKind::RBrace, "}")?;
+        Ok(Expr::StructLiteral { name, fields })
+    }
 
+    fn parse_struct_literal_fields(&mut self) -> Result<Vec<(String, Expr)>, ParseError> {
         let mut fields = Vec::new();
-        if !self.check(&TokenKind::RBrace) {
+        if !self.check(&TokenKind::RBrace) && !self.check(&TokenKind::RParen) {
             fields.push(self.parse_struct_literal_field()?);
             while self.check(&TokenKind::Comma) {
                 self.advance();
                 fields.push(self.parse_struct_literal_field()?);
             }
         }
-
-        self.allow_struct_literal = prev;
-        self.expect(&TokenKind::RBrace, "}")?;
-        Ok(Expr::StructLiteral { name, fields })
+        Ok(fields)
     }
 
     fn parse_struct_literal_field(&mut self) -> Result<(String, Expr), ParseError> {
@@ -806,6 +874,55 @@ mod tests {
                         ("y".to_string(), Expr::IntLiteral(2)),
                     ],
                 }],
+            }
+        );
+    }
+
+    #[test]
+    fn parses_enum_decl_with_unit_and_data_variants() {
+        let program =
+            parse("enum Status { Pending, Failed(reason: String) }\nfn main() {}").unwrap();
+        assert_eq!(program.enums.len(), 1);
+        let e = &program.enums[0];
+        assert_eq!(e.name, "Status");
+        assert_eq!(e.variants[0], EnumVariant { name: "Pending".to_string(), fields: vec![] });
+        assert_eq!(
+            e.variants[1],
+            EnumVariant {
+                name: "Failed".to_string(),
+                fields: vec![Param { name: "reason".to_string(), type_name: "String".to_string() }],
+            }
+        );
+    }
+
+    #[test]
+    fn parses_unit_variant_construction() {
+        let program = parse("fn main() { s := Status::Pending }").unwrap();
+        let Stmt::VariableDecl { value, .. } = &program.functions[0].body[0] else {
+            panic!("expected VariableDecl");
+        };
+        assert_eq!(
+            *value,
+            Expr::EnumLiteral {
+                enum_name: "Status".to_string(),
+                variant: "Pending".to_string(),
+                fields: vec![],
+            }
+        );
+    }
+
+    #[test]
+    fn parses_data_variant_construction() {
+        let program = parse(r#"fn main() { s := Status::Failed(reason: "oops") }"#).unwrap();
+        let Stmt::VariableDecl { value, .. } = &program.functions[0].body[0] else {
+            panic!("expected VariableDecl");
+        };
+        assert_eq!(
+            *value,
+            Expr::EnumLiteral {
+                enum_name: "Status".to_string(),
+                variant: "Failed".to_string(),
+                fields: vec![("reason".to_string(), Expr::StringLiteral("oops".to_string()))],
             }
         );
     }

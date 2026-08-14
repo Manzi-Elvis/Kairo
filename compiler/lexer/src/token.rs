@@ -12,6 +12,7 @@ pub enum TokenKind {
     Struct,
     True,
     False,
+    Enum,
 
     // Literals
     Identifier(String),
@@ -25,6 +26,7 @@ pub enum TokenKind {
     RBrace,   // }
     Comma,    // ,
     Colon,    // :
+    ColonColon, // ::
     Dot,      // .
     Arrow,    // ->
     ColonEq,  // :=

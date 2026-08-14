@@ -119,6 +119,7 @@ impl Lexer {
             "struct" => TokenKind::Struct,
             "true" => TokenKind::True,
             "false" => TokenKind::False,
+            "enum" => TokenKind::Enum,
             _ => TokenKind::Identifier(ident),
         }
     }
@@ -205,6 +206,10 @@ impl Lexer {
             ':' if self.peek() == Some('=') => {
                 self.advance();
                 Ok(TokenKind::ColonEq)
+            }
+            ':' if self.peek() == Some(':') => {
+                self.advance();
+                Ok(TokenKind::ColonColon)
             }
             ':' => Ok(TokenKind::Colon),
             '=' => Ok(TokenKind::Eq),
@@ -416,6 +421,25 @@ mod tests {
                 TokenKind::Identifier("p".into()),
                 TokenKind::Dot,
                 TokenKind::Identifier("x".into()),
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn tokenizes_enum_and_double_colon() {
+        let kinds = kinds("enum Status { Pending } Status::Pending");
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::Enum,
+                TokenKind::Identifier("Status".into()),
+                TokenKind::LBrace,
+                TokenKind::Identifier("Pending".into()),
+                TokenKind::RBrace,
+                TokenKind::Identifier("Status".into()),
+                TokenKind::ColonColon,
+                TokenKind::Identifier("Pending".into()),
                 TokenKind::Eof,
             ]
         );
