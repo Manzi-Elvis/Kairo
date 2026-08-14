@@ -1,5 +1,5 @@
 use kairo_lexer::{Span, Token, TokenKind};
-use kairo_ast::{BinaryOp, EnumDecl, EnumVariant, Expr, FunctionDecl, Param, Program, Stmt, StructDecl};
+use kairo_ast::{BinaryOp, EnumDecl, EnumVariant, Expr, FunctionDecl, MatchArm, Param, Pattern, Program, Stmt, StructDecl,};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParseError {
@@ -181,6 +181,9 @@ impl Parser {
         if self.check(&TokenKind::While) {
             return self.parse_while_stmt();
         }
+        if self.check(&TokenKind::Match) {
+            return self.parse_match_stmt();
+        }
         if self.check(&TokenKind::Mut) {
             return self.parse_mut_decl();
         }
@@ -270,6 +273,80 @@ impl Parser {
         self.expect(&TokenKind::RBrace, "}")?;
 
         Ok(Stmt::While { condition, body })
+    }
+
+    fn parse_match_stmt(&mut self) -> Result<Stmt, ParseError> {
+        self.expect(&TokenKind::Match, "match")?;
+        let scrutinee = self.parse_condition()?; // same struct-literal ambiguity rule as if/while
+        self.expect(&TokenKind::LBrace, "{")?;
+
+        let mut arms = Vec::new();
+        while !self.check(&TokenKind::RBrace) {
+            arms.push(self.parse_match_arm()?);
+        }
+        self.expect(&TokenKind::RBrace, "}")?;
+
+        Ok(Stmt::Match { scrutinee, arms })
+    }
+
+    fn parse_match_arm(&mut self) -> Result<MatchArm, ParseError> {
+        let pattern = self.parse_pattern()?;
+        self.expect(&TokenKind::FatArrow, "=>")?;
+        self.expect(&TokenKind::LBrace, "{")?;
+        let body = self.parse_block_stmts()?;
+        self.expect(&TokenKind::RBrace, "}")?;
+        Ok(MatchArm { pattern, body })
+    }
+
+    fn parse_pattern(&mut self) -> Result<Pattern, ParseError> {
+        match self.peek_kind().clone() {
+            TokenKind::IntLiteral(v) => {
+                self.advance();
+                Ok(Pattern::IntLiteral(v))
+            }
+            TokenKind::StringLiteral(v) => {
+                self.advance();
+                Ok(Pattern::StringLiteral(v))
+            }
+            TokenKind::True => {
+                self.advance();
+                Ok(Pattern::BoolLiteral(true))
+            }
+            TokenKind::False => {
+                self.advance();
+                Ok(Pattern::BoolLiteral(false))
+            }
+            TokenKind::Identifier(name) if name == "_" => {
+                self.advance();
+                Ok(Pattern::Wildcard)
+            }
+            TokenKind::Identifier(enum_name) => {
+                self.advance();
+                self.expect(&TokenKind::ColonColon, "::")?;
+                let variant = self.expect_identifier()?;
+                let bindings = if self.check(&TokenKind::LParen) {
+                    self.advance();
+                    let mut names = Vec::new();
+                    if !self.check(&TokenKind::RParen) {
+                        names.push(self.expect_identifier()?);
+                        while self.check(&TokenKind::Comma) {
+                            self.advance();
+                            names.push(self.expect_identifier()?);
+                        }
+                    }
+                    self.expect(&TokenKind::RParen, ")")?;
+                    names
+                } else {
+                    Vec::new()
+                };
+                Ok(Pattern::EnumVariant { enum_name, variant, bindings })
+            }
+            other => Err(ParseError::UnexpectedToken {
+                expected: "pattern".to_string(),
+                found: other,
+                span: self.peek().span,
+            }),
+        }
     }
 
     /// Parses an expression with struct literals disallowed at the
@@ -925,5 +1002,58 @@ mod tests {
                 fields: vec![("reason".to_string(), Expr::StringLiteral("oops".to_string()))],
             }
         );
+    }
+
+    #[test]
+    fn parses_match_with_enum_and_wildcard() {
+        let source = r#"
+            fn main() {
+                match s {
+                    Status::Pending => { print("p") }
+                    Status::Failed(reason) => { print(reason) }
+                    _ => { print("other") }
+                }
+            }
+        "#;
+        let program = parse(source).unwrap();
+        let Stmt::Match { scrutinee, arms } = &program.functions[0].body[0] else {
+            panic!("expected Match statement");
+        };
+        assert_eq!(*scrutinee, Expr::Identifier("s".to_string()));
+        assert_eq!(arms.len(), 3);
+        assert_eq!(
+            arms[0].pattern,
+            Pattern::EnumVariant {
+                enum_name: "Status".to_string(),
+                variant: "Pending".to_string(),
+                bindings: vec![],
+            }
+        );
+        assert_eq!(
+            arms[1].pattern,
+            Pattern::EnumVariant {
+                enum_name: "Status".to_string(),
+                variant: "Failed".to_string(),
+                bindings: vec!["reason".to_string()],
+            }
+        );
+        assert_eq!(arms[2].pattern, Pattern::Wildcard);
+    }
+
+    #[test]
+    fn parses_match_with_literal_patterns() {
+        let source = r#"
+            fn main() {
+                match x {
+                    5 => { print("five") }
+                    _ => { print("other") }
+                }
+            }
+        "#;
+        let program = parse(source).unwrap();
+        let Stmt::Match { arms, .. } = &program.functions[0].body[0] else {
+            panic!("expected Match statement");
+        };
+        assert_eq!(arms[0].pattern, Pattern::IntLiteral(5));
     }
 }
