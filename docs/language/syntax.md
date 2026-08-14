@@ -142,3 +142,81 @@ after parsing, before execution. Mismatched operand types, wrong
 argument types/counts, struct field mismatches, non-Bool
 conditions, and undefined types/functions/structs are now caught
 as `type error: ...` without needing to run the program.
+
+---
+
+# Kairo v0.8: enums (construction only, no match yet)
+
+## New tokens
+- Keyword: `enum`
+- Punctuation: `::` (double colon, for `EnumName::Variant`)
+
+## New declaration
+
+```
+enum Status {
+  Pending,
+  Failed(reason: String)
+}
+```
+
+Variants are comma-separated. A variant with no parentheses carries
+no data; a variant with `(name: Type, ...)` carries named fields,
+same shape as struct fields.
+
+## New expression
+- `EnumName::Variant` — unit variant construction
+- `EnumName::Variant(field: <expr>, ...)` — data variant construction,
+  same field-matching rules as struct literals (all fields required,
+  by name, no extras)
+
+## Deferred to v0.9
+- `match` expressions/statements — this slice only supports
+  constructing and passing enum values around, not inspecting them
+- `Option<T>` / `Result<T, E>` as built-ins — needs generics, which
+  don't exist yet; deferred further than v0.9
+
+  ---
+
+# Kairo v0.9: match statements and exhaustiveness
+
+## New tokens
+- Keyword: `match`
+- Punctuation: `=>` (fat arrow)
+- `_` is not a new token — it's the existing identifier `_` treated
+  as a wildcard pattern only inside match arms.
+
+## New statement
+```
+match <scrutinee> {
+  EnumName::Variant => { ... }
+  EnumName::Variant(binding1, binding2) => { ... }
+  5 => { ... }
+_   => { ... }
+}
+```
+- No commas between arms — each arm's `{ ... }` delimits it.
+- Enum variant patterns bind fields **positionally** by the order
+  declared in the `enum`, regardless of the binding name chosen.
+- Literal patterns (`Int`, `Bool`, `String`) match by value equality.
+- `_` matches anything and binds nothing.
+
+## Exhaustiveness (checked statically by `kairo check`)
+- Enum scrutinee: every variant must have an arm, or a `_` arm.
+- Bool scrutinee: both `true` and `false` must have arms, or `_`.
+- Int/String/Struct/Unit scrutinee: a `_` arm is required (no way
+  to enumerate all values).
+
+## Known limitation
+Pattern bindings are scoped to their arm by the type checker (not
+visible after the match, not shared between arms). The interpreter
+still uses one flat per-function variable scope like the rest of
+the language, so bindings technically remain accessible after the
+match at runtime too. Harmless today since the type checker already
+rejects any program that could observe the difference — worth
+tightening once real block scoping exists.
+
+## Deferred
+- Match as an expression (returning a value)
+- Nested/compound patterns, guards (`if` conditions on arms)
+- `Option<T>` / `Result<T, E>` built-ins (still blocked on generics)
