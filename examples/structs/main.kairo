@@ -1,0 +1,19 @@
+struct Point {
+    x: Int,
+    y: Int
+}
+
+fn distanceSquared(a: Point, b: Point) -> Int {
+    dx := a.x - b.x
+    dy := a.y - b.y
+    return dx * dx + dy * dy
+}
+
+fn main() {
+    p1 := Point { x: 0, y: 0 }
+    p2 := Point { x: 3, y: 4 }
+
+    print(p1.x)
+    print(p2.y)
+    print(distanceSquared(p1, p2))
+}
