@@ -132,3 +132,13 @@ one is genuinely needed there: `if (x { ... }) { ... }`.
   via `=` (if the variable is `mut`) is possible
 - Struct methods
 - Generic structs
+
+---
+
+# Kairo v0.7: static type checking
+
+`kairo check` and `kairo run` now perform static type checking
+after parsing, before execution. Mismatched operand types, wrong
+argument types/counts, struct field mismatches, non-Bool
+conditions, and undefined types/functions/structs are now caught
+as `type error: ...` without needing to run the program.
