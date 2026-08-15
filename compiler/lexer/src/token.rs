@@ -43,8 +43,9 @@ pub enum TokenKind {
     Gt,       // >
     LtEq,     // <=
     GtEq,     // >=
-
     Eof,
+    LBracket, // [
+    RBracket, // ]
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
