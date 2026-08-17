@@ -8,6 +8,7 @@ pub enum Type {
     String,
     Unit,
     Struct(String),
+    Array(Box<Type>),
     Enum(String),
 }
 
@@ -19,6 +20,7 @@ impl Type {
             Type::String => "String".to_string(),
             Type::Unit => "Unit".to_string(),
             Type::Struct(n) => n.clone(),
+            Type::Array(inner) => format!("Array<{}>", inner.name()),
             Type::Enum(n) => n.clone(),
         }
     }
@@ -33,6 +35,7 @@ pub enum TypeError {
     AlreadyDeclared(String),
     ImmutableAssignment(String),
     Mismatch { expected: String, found: String, context: String },
+    CannotInferType(String),
     WrongArgCount { callee: String, expected: usize, found: usize },
     UnknownField { struct_name: String, field: String },
     MissingField { struct_name: String, field: String },
@@ -215,6 +218,39 @@ impl TypeChecker {
                             }
                         }
                     }
+                }
+            }
+            Stmt::IndexAssign { name, index, value } => {
+                let idx_type = self.eval_expr_type(index, scope, errors);
+                if let Some(idx_type) = idx_type {
+                    if idx_type != Type::Int {
+                        errors.push(TypeError::Mismatch {
+                            expected: "Int".to_string(),
+                            found: idx_type.name(),
+                            context: "array index".to_string(),
+                        });
+                    }
+                }
+                let value_type = self.eval_expr_type(value, scope, errors);
+                match scope.get(name) {
+                    None => errors.push(TypeError::UndefinedVariable(name.clone())),
+                    Some((_, false)) => errors.push(TypeError::ImmutableAssignment(name.clone())),
+                    Some((Type::Array(inner), true)) => {
+                        if let Some(found) = value_type {
+                            if found != **inner {
+                                errors.push(TypeError::Mismatch {
+                                    expected: inner.name(),
+                                    found: found.name(),
+                                    context: format!("index assignment to `{}`", name),
+                                });
+                            }
+                        }
+                    }
+                    Some((other, true)) => errors.push(TypeError::Mismatch {
+                        expected: "Array".to_string(),
+                        found: other.name(),
+                        context: format!("index assignment to `{}`", name),
+                    }),
                 }
             }
 
@@ -513,6 +549,52 @@ impl TypeChecker {
                     }
                 }
             }
+            Expr::ArrayLiteral(elements) => {
+                if elements.is_empty() {
+                    errors.push(TypeError::CannotInferType(
+                        "empty array literal (no elements to infer type from)".to_string(),
+                    ));
+                    return None;
+                }
+                let first = self.eval_expr_type(&elements[0], scope, errors)?;
+                for e in &elements[1..] {
+                    if let Some(t) = self.eval_expr_type(e, scope, errors) {
+                        if t != first {
+                            errors.push(TypeError::Mismatch {
+                                expected: first.name(),
+                                found: t.name(),
+                                context: "array literal element".to_string(),
+                            });
+                        }
+                    }
+                }
+                Some(Type::Array(Box::new(first)))
+            }
+
+            Expr::Index { array, index } => {
+                let arr_type = self.eval_expr_type(array, scope, errors)?;
+                let idx_type = self.eval_expr_type(index, scope, errors);
+                if let Some(idx_type) = idx_type {
+                    if idx_type != Type::Int {
+                        errors.push(TypeError::Mismatch {
+                            expected: "Int".to_string(),
+                            found: idx_type.name(),
+                            context: "array index".to_string(),
+                        });
+                    }
+                }
+                match arr_type {
+                    Type::Array(inner) => Some(*inner),
+                    other => {
+                        errors.push(TypeError::Mismatch {
+                            expected: "Array".to_string(),
+                            found: other.name(),
+                            context: "indexing".to_string(),
+                        });
+                        None
+                    }
+                }
+            }
         }
     }
 
@@ -577,6 +659,49 @@ impl TypeChecker {
                 self.eval_expr_type(&args[0], scope, errors);
             }
             return Some(Type::Unit);
+        }
+
+        if callee == "len" {
+            if args.len() != 1 {
+                errors.push(TypeError::WrongArgCount { callee: "len".to_string(), expected: 1, found: args.len() });
+            } else if let Some(t) = self.eval_expr_type(&args[0], scope, errors) {
+                if !matches!(t, Type::Array(_)) {
+                    errors.push(TypeError::Mismatch {
+                        expected: "Array".to_string(), found: t.name(), context: "argument to `len`".to_string(),
+                    });
+                }
+            }
+            return Some(Type::Int);
+        }
+        if callee == "push" {
+            if args.len() != 2 {
+                errors.push(TypeError::WrongArgCount { callee: "push".to_string(), expected: 2, found: args.len() });
+                for a in args { self.eval_expr_type(a, scope, errors); }
+                return None;
+            }
+            let arr_t = self.eval_expr_type(&args[0], scope, errors);
+            let val_t = self.eval_expr_type(&args[1], scope, errors);
+            return match arr_t {
+                Some(Type::Array(inner)) => {
+                    if let Some(val_t) = val_t {
+                        if val_t != *inner {
+                            errors.push(TypeError::Mismatch {
+                                expected: inner.name(), found: val_t.name(),
+                                context: "second argument to `push`".to_string(),
+                            });
+                        }
+                    }
+                    Some(Type::Array(inner))
+                }
+                Some(other) => {
+                    errors.push(TypeError::Mismatch {
+                        expected: "Array".to_string(), found: other.name(),
+                        context: "first argument to `push`".to_string(),
+                    });
+                    None
+                }
+                None => None,
+            };
         }
 
         let Some(sig_len) = self.functions.get(callee).map(|s| s.params.len()) else {
@@ -925,6 +1050,44 @@ mod tests {
     fn catches_pattern_type_mismatch() {
         let source = "fn main() { x := 5\nmatch x { true => { print(\"t\") } _ => { print(\"o\") } } }";
         let err = check(source).unwrap_err();
+        assert!(err.iter().any(|e| matches!(e, TypeError::Mismatch { .. })));
+    }
+
+    #[test]
+    fn passes_valid_array_usage() {
+        let source = r#"
+            fn main() {
+                mut a := [1, 2, 3]
+                a[0] = 9
+                x := a[0]
+                print(len(a))
+                b := push(a, 4)
+            }
+        "#;
+        assert_eq!(check(source), Ok(()));
+    }
+
+    #[test]
+    fn catches_array_element_type_mismatch() {
+        let err = check("fn main() { a := [1, true] }").unwrap_err();
+        assert!(err.iter().any(|e| matches!(e, TypeError::Mismatch { .. })));
+    }
+
+    #[test]
+    fn catches_non_int_index() {
+        let err = check("fn main() { a := [1, 2]\nx := a[\"k\"] }").unwrap_err();
+        assert!(err.iter().any(|e| matches!(e, TypeError::Mismatch { .. })));
+    }
+
+    #[test]
+    fn catches_index_assign_type_mismatch() {
+        let err = check("fn main() { mut a := [1, 2]\na[0] = true }").unwrap_err();
+        assert!(err.iter().any(|e| matches!(e, TypeError::Mismatch { .. })));
+    }
+
+    #[test]
+    fn catches_push_type_mismatch() {
+        let err = check("fn main() { a := [1, 2]\nb := push(a, true) }").unwrap_err();
         assert!(err.iter().any(|e| matches!(e, TypeError::Mismatch { .. })));
     }
 }

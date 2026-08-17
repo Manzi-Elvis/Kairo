@@ -220,3 +220,32 @@ tightening once real block scoping exists.
 - Match as an expression (returning a value)
 - Nested/compound patterns, guards (`if` conditions on arms)
 - `Option<T>` / `Result<T, E>` built-ins (still blocked on generics)
+
+---
+
+# Kairo v0.10: arrays
+
+## New tokens
+- Punctuation: `[`, `]`
+
+## New expressions
+- `[<expr>, <expr>, ...]` — array literal, type inferred from elements
+  (all elements must share one type; empty literals are not yet
+  supported — no way to infer their type without generics syntax)
+- `<expr>[<expr>]` — indexing (read), Int index, runtime bounds check
+
+## New statement
+- `name[<expr>] = <expr>` — index assignment; `name` must be a `mut`
+  variable bound to an array
+
+## New built-in functions
+- `len(arr) -> Int`
+- `push(arr, item) -> Array<T>` — returns a **new** array with `item`
+  appended; does not mutate `arr` (consistent with Kairo's current
+  value-semantics-only model — no references exist yet)
+
+## Deferred
+- Array types in function parameters/return types (`Array<Int>`) —
+  blocked on generic type syntax, which doesn't exist yet
+- `for`/`for-in` loops — iterate with `while` + `len` + indexing for now
+- Negative indices, slicing, `pop`/`remove`

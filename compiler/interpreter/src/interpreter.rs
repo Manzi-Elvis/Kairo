@@ -11,6 +11,7 @@ pub enum RuntimeError {
     NoMainFunction,
     TypeError(String),
     DivisionByZero,
+    IndexOutOfBounds(i64),
     AlreadyDeclared(String),
     ImmutableAssignment(String),
     StructError(String),
@@ -106,6 +107,33 @@ impl<'a> Interpreter<'a> {
                     }
                     Some(binding) => {
                         binding.value = v;
+                        Ok(ControlFlow::Normal)
+                    }
+                }
+            }
+            Stmt::IndexAssign { name, index, value } => {
+                let idx_val = self.eval_expr(index)?;
+                let Value::Int(i) = idx_val else {
+                    return Err(RuntimeError::TypeError(format!(
+                        "array index must be Int, found {}", idx_val.type_name()
+                    )));
+                };
+                let new_val = self.eval_expr(value)?;
+                match self.env.get_mut(name) {
+                    None => Err(RuntimeError::UndefinedVariable(name.clone())),
+                    Some(binding) if !binding.is_mutable => {
+                        Err(RuntimeError::ImmutableAssignment(name.clone()))
+                    }
+                    Some(binding) => {
+                        let Value::Array(items) = &mut binding.value else {
+                            return Err(RuntimeError::TypeError(
+                                "cannot index-assign into a non-array".to_string(),
+                            ));
+                        };
+                        if i < 0 || i as usize >= items.len() {
+                            return Err(RuntimeError::IndexOutOfBounds(i));
+                        }
+                        items[i as usize] = new_val;
                         Ok(ControlFlow::Normal)
                     }
                 }
@@ -245,6 +273,33 @@ impl<'a> Interpreter<'a> {
                         other.type_name()
                     ))),
                 }
+            }
+
+            Expr::ArrayLiteral(elements) => {
+                let mut values = Vec::with_capacity(elements.len());
+                for e in elements {
+                    values.push(self.eval_expr(e)?);
+                }
+                Ok(Value::Array(values))
+            }
+
+            Expr::Index { array, index } => {
+                let idx_val = self.eval_expr(index)?;
+                let Value::Int(i) = idx_val else {
+                    return Err(RuntimeError::TypeError(format!(
+                        "array index must be Int, found {}", idx_val.type_name()
+                    )));
+                };
+                let arr_val = self.eval_expr(array)?;
+                let Value::Array(items) = arr_val else {
+                    return Err(RuntimeError::TypeError(format!(
+                        "cannot index into {}", arr_val.type_name()
+                    )));
+                };
+                if i < 0 || i as usize >= items.len() {
+                    return Err(RuntimeError::IndexOutOfBounds(i));
+                }
+                Ok(items[i as usize].clone())
             }
         }
     }
@@ -398,6 +453,31 @@ impl<'a> Interpreter<'a> {
             let value = self.eval_expr(&args[0])?;
             (self.print_sink)(&value.display());
             return Ok(Value::Unit);
+        }
+
+        if callee == "len" {
+            if args.len() != 1 {
+                return Err(RuntimeError::WrongArgCount {
+                    callee: "len".to_string(), expected: 1, found: args.len(),
+                });
+            }
+            let Value::Array(items) = self.eval_expr(&args[0])? else {
+                return Err(RuntimeError::TypeError("len expects an Array".to_string()));
+            };
+            return Ok(Value::Int(items.len() as i64));
+        }
+        if callee == "push" {
+            if args.len() != 2 {
+                return Err(RuntimeError::WrongArgCount {
+                    callee: "push".to_string(), expected: 2, found: args.len(),
+                });
+            }
+            let Value::Array(mut items) = self.eval_expr(&args[0])? else {
+                return Err(RuntimeError::TypeError("push expects an Array as its first argument".to_string()));
+            };
+            let new_item = self.eval_expr(&args[1])?;
+            items.push(new_item);
+            return Ok(Value::Array(items));
         }
 
         let Some(func) = self.functions.get(callee).cloned() else {
@@ -964,5 +1044,49 @@ mod tests {
             }
         "#;
         assert_eq!(run_and_capture(source).unwrap_err(), RuntimeError::NonExhaustiveMatch);
+    }
+
+    #[test]
+    fn indexes_array() {
+        let source = "fn main() { a := [10, 20, 30]\nprint(a[1]) }";
+        assert_eq!(run_and_capture(source).unwrap(), vec!["20".to_string()]);
+    }
+
+    #[test]
+    fn index_assignment_mutates_array() {
+        let source = "fn main() { mut a := [1, 2, 3]\na[1] = 99\nprint(a[1]) }";
+        assert_eq!(run_and_capture(source).unwrap(), vec!["99".to_string()]);
+    }
+
+    #[test]
+    fn len_and_push_builtins() {
+        let source = r#"
+            fn main() {
+                a := [1, 2, 3]
+                print(len(a))
+                b := push(a, 4)
+                print(len(b))
+                print(len(a))
+            }
+        "#;
+        assert_eq!(
+            run_and_capture(source).unwrap(),
+            vec!["3".to_string(), "4".to_string(), "3".to_string()]
+        );
+    }
+
+    #[test]
+    fn reports_index_out_of_bounds() {
+        let source = "fn main() { a := [1, 2]\nprint(a[5]) }";
+        assert_eq!(run_and_capture(source).unwrap_err(), RuntimeError::IndexOutOfBounds(5));
+    }
+
+    #[test]
+    fn reports_index_assignment_on_immutable_array() {
+        let source = "fn main() { a := [1, 2]\na[0] = 9 }";
+        assert_eq!(
+            run_and_capture(source).unwrap_err(),
+            RuntimeError::ImmutableAssignment("a".to_string())
+        );
     }
 }
