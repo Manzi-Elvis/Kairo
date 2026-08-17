@@ -209,6 +209,24 @@ impl Parser {
                     let value = self.parse_expr()?;
                     return Ok(Stmt::Assign { name, value });
                 }
+                Some(&TokenKind::LBracket) => {
+                    let expr = self.parse_expr()?;
+                    if self.check(&TokenKind::Eq) {
+                        self.advance();
+                        let value = self.parse_expr()?;
+                        if let Expr::Index { array, index } = expr {
+                            if let Expr::Identifier(name) = *array {
+                                return Ok(Stmt::IndexAssign { name, index: *index, value });
+                            }
+                        }
+                        return Err(ParseError::UnexpectedToken {
+                            expected: "index assignment target".to_string(),
+                            found: self.peek_kind().clone(),
+                            span: self.peek().span,
+                        });
+                    }
+                    return Ok(Stmt::Expr(expr));
+                }
                 _ => {}
             }
         }
@@ -433,10 +451,22 @@ impl Parser {
     /// `FieldAccess(FieldAccess(a, b), c)`.
     fn parse_postfix(&mut self) -> Result<Expr, ParseError> {
         let mut expr = self.parse_primary()?;
-        while self.check(&TokenKind::Dot) {
-            self.advance();
-            let field = self.expect_identifier()?;
-            expr = Expr::FieldAccess { object: Box::new(expr), field };
+        loop {
+            if self.check(&TokenKind::Dot) {
+                self.advance();
+                let field = self.expect_identifier()?;
+                expr = Expr::FieldAccess { object: Box::new(expr), field };
+            } else if self.check(&TokenKind::LBracket) {
+                self.advance();
+                let prev = self.allow_struct_literal;
+                self.allow_struct_literal = true;
+                let index = self.parse_expr()?;
+                self.allow_struct_literal = prev;
+                self.expect(&TokenKind::RBracket, "]")?;
+                expr = Expr::Index { array: Box::new(expr), index: Box::new(index) };
+            } else {
+                break;
+            }
         }
         Ok(expr)
     }
@@ -451,6 +481,22 @@ impl Parser {
                 self.allow_struct_literal = prev;
                 self.expect(&TokenKind::RParen, ")")?;
                 Ok(inner)
+            }
+            TokenKind::LBracket => {
+                self.advance();
+                let prev = self.allow_struct_literal;
+                self.allow_struct_literal = true;
+                let mut elements = Vec::new();
+                if !self.check(&TokenKind::RBracket) {
+                    elements.push(self.parse_expr()?);
+                    while self.check(&TokenKind::Comma) {
+                        self.advance();
+                        elements.push(self.parse_expr()?);
+                    }
+                }
+                self.allow_struct_literal = prev;
+                self.expect(&TokenKind::RBracket, "]")?;
+                Ok(Expr::ArrayLiteral(elements))
             }
             TokenKind::StringLiteral(value) => {
                 self.advance();
@@ -1055,5 +1101,44 @@ mod tests {
             panic!("expected Match statement");
         };
         assert_eq!(arms[0].pattern, Pattern::IntLiteral(5));
+    }
+
+    #[test]
+    fn parses_array_literal_and_indexing() {
+        let program = parse("fn main() { a := [1, 2, 3]\nx := a[0] }").unwrap();
+        assert_eq!(
+            program.functions[0].body[0],
+            Stmt::VariableDecl {
+                name: "a".to_string(),
+                value: Expr::ArrayLiteral(vec![
+                    Expr::IntLiteral(1), Expr::IntLiteral(2), Expr::IntLiteral(3)
+                ]),
+                is_mutable: false,
+            }
+        );
+        assert_eq!(
+            program.functions[0].body[1],
+            Stmt::VariableDecl {
+                name: "x".to_string(),
+                value: Expr::Index {
+                    array: Box::new(Expr::Identifier("a".to_string())),
+                    index: Box::new(Expr::IntLiteral(0)),
+                },
+                is_mutable: false,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_index_assignment() {
+        let program = parse("fn main() { mut a := [1, 2]\na[0] = 9 }").unwrap();
+        assert_eq!(
+            program.functions[0].body[1],
+            Stmt::IndexAssign {
+                name: "a".to_string(),
+                index: Expr::IntLiteral(0),
+                value: Expr::IntLiteral(9),
+            }
+        );
     }
 }

@@ -13,7 +13,7 @@ pub enum Value {
         name: String,
         fields: HashMap<String, Value>,
     },
-
+    Array(Vec<Value>),
     Enum {
         enum_name: String,
         variant: String,
@@ -40,6 +40,10 @@ impl Value {
                     .collect();
                 format!("{} {{ {} }}", name, parts.join(", "))
             }
+            Value::Array(items) => {
+                let parts: Vec<String> = items.iter().map(|v| v.display()).collect();
+                format!("[{}]", parts.join(", "))
+            }
             Value::Enum { enum_name, variant, fields } => {
                 if fields.is_empty() {
                     format!("{}::{}", enum_name, variant)
@@ -65,6 +69,7 @@ impl Value {
             Value::Unit => "Unit".to_string(),
             Value::Struct { name, .. } => name.clone(),
             Value::Enum { enum_name, .. } => enum_name.clone(),
+            Value::Array(_) => "Array".to_string(),
         }
     }
 }

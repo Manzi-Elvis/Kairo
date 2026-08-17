@@ -219,6 +219,8 @@ impl Lexer {
                 Ok(TokenKind::ColonColon)
             }
             ':' => Ok(TokenKind::Colon),
+            '[' => Ok(TokenKind::LBracket),
+            ']' => Ok(TokenKind::RBracket),
             other => Err(LexError::UnrecognizedChar {
                 ch: other,
                 line,
@@ -465,6 +467,22 @@ mod tests {
                 TokenKind::LBrace,
                 TokenKind::RBrace,
                 TokenKind::RBrace,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn tokenizes_brackets() {
+        let kinds = kinds("[1, 2]");
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::LBracket,
+                TokenKind::IntLiteral(1),
+                TokenKind::Comma,
+                TokenKind::IntLiteral(2),
+                TokenKind::RBracket,
                 TokenKind::Eof,
             ]
         );
