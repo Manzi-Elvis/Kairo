@@ -45,6 +45,7 @@ pub enum TypeError {
     UndefinedEnum(String),
     UndefinedVariant { enum_name: String, variant: String },
     NonExhaustiveMatch(String),
+    NotResultShaped(String),
 }
 
 struct FunctionSig {
@@ -58,6 +59,7 @@ pub struct TypeChecker {
     enum_names: HashSet<String>,
     enum_variants: HashMap<String, HashMap<String, Vec<(String, Type)>>>,
     functions: HashMap<String, FunctionSig>,
+    current_return_type: Type,
 }
 
 impl Default for TypeChecker {
@@ -67,15 +69,16 @@ impl Default for TypeChecker {
 }
 
 impl TypeChecker {
-      pub fn new() -> Self {
-            Self {
-                  struct_names: HashSet::new(),
-                  struct_fields: HashMap::new(),
-                  enum_names: HashSet::new(),
-                  enum_variants: HashMap::new(),
-                  functions: HashMap::new(),
-            }
-      }
+    pub fn new() -> Self {
+        Self {
+            struct_names: HashSet::new(),
+            struct_fields: HashMap::new(),
+            enum_names: HashSet::new(),
+            enum_variants: HashMap::new(),
+            functions: HashMap::new(),
+            current_return_type: Type::Unit,
+        }
+    }
 
     pub fn check_program(&mut self, program: &Program) -> Result<(), Vec<TypeError>> {
         let mut errors = Vec::new();
@@ -161,7 +164,7 @@ impl TypeChecker {
         self.functions.insert(f.name.clone(), FunctionSig { params, return_type });
     }
 
-    fn check_function_body(&self, f: &FunctionDecl, errors: &mut Vec<TypeError>) {
+    fn check_function_body(&mut self, f: &FunctionDecl, errors: &mut Vec<TypeError>) {
         let mut scope: HashMap<String, (Type, bool)> = HashMap::new();
         for p in &f.params {
             if let Some(t) = self.resolve_type(&p.type_name) {
@@ -174,12 +177,16 @@ impl TypeChecker {
             .map(|sig| sig.return_type.clone())
             .unwrap_or(Type::Unit);
 
+        // Stored so Expr::Try (nested arbitrarily deep in eval_expr_type,
+        // which isn't itself threaded with return_type) can check against it.
+        // Safe because functions are checked one at a time, not re-entrantly.
+        self.current_return_type = return_type.clone();
         for stmt in &f.body {
             self.check_stmt(stmt, &mut scope, &return_type, errors);
         }
     }
 
-        fn check_stmt(
+    fn check_stmt(
         &self,
         stmt: &Stmt,
         scope: &mut HashMap<String, (Type, bool)>,
@@ -335,7 +342,7 @@ impl TypeChecker {
         }
     }
 
-         fn check_pattern(
+        fn check_pattern(
         &self,
         pattern: &Pattern,
         scrutinee_type: &Type,
@@ -595,7 +602,7 @@ impl TypeChecker {
                     }
                 }
             }
-        }
+            Expr::Try(inner) => self.check_try(inner, scope, errors),        }
     }
 
     fn check_binary(
@@ -852,6 +859,40 @@ impl TypeChecker {
 
         Some(Type::Enum(enum_name.to_string()))
     }
+
+    fn check_try(
+        &self,
+        inner: &Expr,
+        scope: &HashMap<String, (Type, bool)>,
+        errors: &mut Vec<TypeError>,
+    ) -> Option<Type> {
+        let inner_type = self.eval_expr_type(inner, scope, errors)?;
+        let Type::Enum(enum_name) = &inner_type else {
+            errors.push(TypeError::NotResultShaped(format!(
+                "`?` requires an enum type, found {}", inner_type.name()
+            )));
+            return None;
+        };
+        let variants = self.enum_variants.get(enum_name)?;
+        let ok_fields = variants.get("Ok")?;
+        let err_fields = variants.get("Err")?;
+        if ok_fields.len() != 1 || ok_fields[0].0 != "value"
+            || err_fields.len() != 1 || err_fields[0].0 != "error"
+        {
+            errors.push(TypeError::NotResultShaped(format!(
+                "enum `{}` is not Ok/Err-shaped (need Ok(value: T), Err(error: E))", enum_name
+            )));
+            return None;
+        }
+        if self.current_return_type != inner_type {
+            errors.push(TypeError::Mismatch {
+                expected: self.current_return_type.name(),
+                found: inner_type.name(),
+                context: "`?` requires the current function to return the same Result-shaped enum".to_string(),
+            });
+        }
+        Some(ok_fields[0].1.clone())
+    }
 }
 
 fn binary_mismatch(op: &str, l: &Type, r: &Type) -> TypeError {
@@ -1088,6 +1129,42 @@ mod tests {
     #[test]
     fn catches_push_type_mismatch() {
         let err = check("fn main() { a := [1, 2]\nb := push(a, true) }").unwrap_err();
+        assert!(err.iter().any(|e| matches!(e, TypeError::Mismatch { .. })));
+    }
+
+    #[test]
+    fn passes_valid_try_usage() {
+        let source = r#"
+            enum IntResult { Ok(value: Int), Err(error: String) }
+            fn make() -> IntResult { return IntResult::Ok(value: 1) }
+            fn compute() -> IntResult {
+                x := make()?
+                return IntResult::Ok(value: x)
+            }
+            fn main() {}
+        "#;
+        assert_eq!(check(source), Ok(()));
+    }
+
+    #[test]
+    fn catches_try_on_non_enum() {
+        let source = "fn f() -> Int { x := 5?\nreturn x }\nfn main() {}";
+        let err = check(source).unwrap_err();
+        assert!(err.iter().any(|e| matches!(e, TypeError::NotResultShaped(_))));
+    }
+
+    #[test]
+    fn catches_try_return_type_mismatch() {
+        let source = r#"
+            enum IntResult { Ok(value: Int), Err(error: String) }
+            fn make() -> IntResult { return IntResult::Ok(value: 1) }
+            fn compute() -> Int {
+                x := make()?
+                return x
+            }
+            fn main() {}
+        "#;
+        let err = check(source).unwrap_err();
         assert!(err.iter().any(|e| matches!(e, TypeError::Mismatch { .. })));
     }
 }
