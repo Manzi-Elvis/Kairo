@@ -1,0 +1,25 @@
+enum IntResult {
+    Ok(value: Int),
+    Err(error: String)
+}
+
+fn divide(a: Int, b: Int) -> IntResult {
+    if b == 0 {
+        return IntResult::Err(error: "division by zero")
+    }
+    return IntResult::Ok(value: a / b)
+}
+
+fn compute() -> IntResult {
+    x := divide(10, 2)?
+    y := divide(x, 0)?
+    return IntResult::Ok(value: y)
+}
+
+fn main() {
+    r := compute()
+    match r {
+        IntResult::Ok(v) => { print(v) }
+        IntResult::Err(e) => { print(e) }
+    }
+}

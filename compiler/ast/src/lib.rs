@@ -132,6 +132,8 @@ pub enum Expr {
     FieldAccess { object: Box<Expr>, field: String },
     ArrayLiteral(Vec<Expr>),
     Index { array: Box<Expr>, index: Box<Expr> },
+    /// `<expr>?` — propagates Err early, unwraps Ok
+    Try(Box<Expr>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

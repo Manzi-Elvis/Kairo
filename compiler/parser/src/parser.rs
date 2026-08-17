@@ -464,6 +464,9 @@ impl Parser {
                 self.allow_struct_literal = prev;
                 self.expect(&TokenKind::RBracket, "]")?;
                 expr = Expr::Index { array: Box::new(expr), index: Box::new(index) };
+            } else if self.check(&TokenKind::Question) {
+                self.advance();
+                expr = Expr::Try(Box::new(expr));
             } else {
                 break;
             }
@@ -1139,6 +1142,18 @@ mod tests {
                 index: Expr::IntLiteral(0),
                 value: Expr::IntLiteral(9),
             }
+        );
+    }
+
+    #[test]
+    fn parses_try_operator() {
+        let program = parse("fn main() { x := doThing()? }").unwrap();
+        let Stmt::VariableDecl { value, .. } = &program.functions[0].body[0] else {
+            panic!("expected VariableDecl");
+        };
+        assert_eq!(
+            *value,
+            Expr::Try(Box::new(Expr::Call { callee: "doThing".to_string(), args: vec![] }))
         );
     }
 }
