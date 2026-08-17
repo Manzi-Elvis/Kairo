@@ -1,0 +1,18 @@
+fn main() {
+    mut nums := [1, 2, 3, 4, 5]
+
+    mut total := 0
+    mut i := 0
+    while i < len(nums) {
+        total = total + nums[i]
+        i = i + 1
+    }
+    print(total)
+
+    nums[0] = 100
+    print(nums[0])
+
+    bigger := push(nums, 6)
+    print(len(nums))
+    print(len(bigger))
+}
