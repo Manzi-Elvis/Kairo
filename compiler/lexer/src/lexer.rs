@@ -221,6 +221,7 @@ impl Lexer {
             ':' => Ok(TokenKind::Colon),
             '[' => Ok(TokenKind::LBracket),
             ']' => Ok(TokenKind::RBracket),
+            '?' => Ok(TokenKind::Question),
             other => Err(LexError::UnrecognizedChar {
                 ch: other,
                 line,
@@ -485,6 +486,15 @@ mod tests {
                 TokenKind::RBracket,
                 TokenKind::Eof,
             ]
+        );
+    }
+
+    #[test]
+    fn tokenizes_question_mark() {
+        let kinds = kinds("x?");
+        assert_eq!(
+            kinds,
+            vec![TokenKind::Identifier("x".into()), TokenKind::Question, TokenKind::Eof]
         );
     }
 }

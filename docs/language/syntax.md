@@ -249,3 +249,35 @@ tightening once real block scoping exists.
   blocked on generic type syntax, which doesn't exist yet
 - `for`/`for-in` loops — iterate with `while` + `len` + indexing for now
 - Negative indices, slicing, `pop`/`remove`
+
+---
+
+# Kairo v0.11: `?` error propagation (convention-based, not generic)
+
+## New token
+- Punctuation: `?`
+
+## New expression
+- `<expr>?` — postfix. `<expr>` must have an enum type with exactly
+  an `Ok(value: T)` variant and an `Err(error: E)` variant (checked
+  by name, not by a compiler-recognized generic type). The current
+  function's return type must be that exact same enum. If `<expr>`
+  evaluates to `Err(e)`, the function returns that `Err(e)`
+  immediately. If `Ok(v)`, the expression evaluates to `v`.
+
+## Known limitation
+This is not the spec's generic `Result<T, E>` (section 17) — Kairo
+has no generic type syntax yet (the same reason `Array<T>` function
+parameters were deferred). Each error-returning function family
+needs its own concretely-typed Ok/Err enum declared by the user,
+e.g.:
+
+```
+enum IntResult {
+Ok(value: Int),
+Err(error: String)
+}
+```
+`?` works on any enum shaped this way, regardless of its name. Real
+generics would let one `Result<T, E>` cover every case — worth
+revisiting once generics exist.

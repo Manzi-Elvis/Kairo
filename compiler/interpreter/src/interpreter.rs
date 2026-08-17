@@ -16,6 +16,11 @@ pub enum RuntimeError {
     ImmutableAssignment(String),
     StructError(String),
     EnumError(String),
+    /// Not a real user-facing error — used internally to unwind to
+    /// the nearest function-call boundary when `?` hits an Err.
+    /// exec_block intercepts this and never lets it reach the top level.
+    TryPropagate(Value),
+    NotResultShaped(String),
     NonExhaustiveMatch,
 }
 
@@ -77,9 +82,16 @@ impl<'a> Interpreter<'a> {
 
     fn exec_block(&mut self, stmts: &[Stmt]) -> Result<ControlFlow, RuntimeError> {
         for stmt in stmts {
-            let flow = self.exec_stmt(stmt)?;
-            if let ControlFlow::Return(_) = flow {
-                return Ok(flow);
+            match self.exec_stmt(stmt) {
+                Err(RuntimeError::TryPropagate(err_value)) => {
+                    return Ok(ControlFlow::Return(err_value));
+                }
+                other => {
+                    let flow = other?;
+                    if let ControlFlow::Return(_) = flow {
+                        return Ok(flow);
+                    }
+                }
             }
         }
         Ok(ControlFlow::Normal)
@@ -300,6 +312,28 @@ impl<'a> Interpreter<'a> {
                     return Err(RuntimeError::IndexOutOfBounds(i));
                 }
                 Ok(items[i as usize].clone())
+            }
+
+            Expr::Try(inner) => {
+                let value = self.eval_expr(inner)?;
+                let Value::Enum { enum_name, variant, mut fields } = value else {
+                    return Err(RuntimeError::NotResultShaped(
+                        "? used on a non-enum value".to_string(),
+                    ));
+                };
+                match variant.as_str() {
+                    "Ok" => fields.remove("value").ok_or_else(|| {
+                        RuntimeError::NotResultShaped(format!(
+                            "enum `{}` variant `Ok` has no `value` field", enum_name
+                        ))
+                    }),
+                    "Err" => Err(RuntimeError::TryPropagate(Value::Enum {
+                        enum_name, variant, fields,
+                    })),
+                    other => Err(RuntimeError::NotResultShaped(format!(
+                        "`?` requires an Ok/Err-shaped enum, found variant `{}`", other
+                    ))),
+                }
             }
         }
     }
@@ -1088,5 +1122,45 @@ mod tests {
             run_and_capture(source).unwrap_err(),
             RuntimeError::ImmutableAssignment("a".to_string())
         );
+    }
+
+    #[test]
+    fn try_unwraps_ok_value() {
+        let source = r#"
+            enum IntResult { Ok(value: Int), Err(error: String) }
+            fn make() -> IntResult { return IntResult::Ok(value: 5) }
+            fn compute() -> IntResult {
+                x := make()?
+                return IntResult::Ok(value: x + 1)
+            }
+            fn main() {
+                r := compute()
+                match r {
+                    IntResult::Ok(v) => { print(v) }
+                    IntResult::Err(e) => { print(e) }
+                }
+            }
+        "#;
+        assert_eq!(run_and_capture(source).unwrap(), vec!["6".to_string()]);
+    }
+
+    #[test]
+    fn try_propagates_err_early() {
+        let source = r#"
+            enum IntResult { Ok(value: Int), Err(error: String) }
+            fn fail() -> IntResult { return IntResult::Err(error: "boom") }
+            fn compute() -> IntResult {
+                x := fail()?
+                return IntResult::Ok(value: x + 1)
+            }
+            fn main() {
+                r := compute()
+                match r {
+                    IntResult::Ok(v) => { print(v) }
+                    IntResult::Err(e) => { print(e) }
+                }
+            }
+        "#;
+        assert_eq!(run_and_capture(source).unwrap(), vec!["boom".to_string()]);
     }
 }
