@@ -11,6 +11,8 @@
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
+    pub module_name: Option<String>,
+    pub imports: Vec<String>,
     pub structs: Vec<StructDecl>,
     pub enums: Vec<EnumDecl>,
     pub functions: Vec<FunctionDecl>,
