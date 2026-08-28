@@ -9,6 +9,7 @@ dependencies = [
  "kairo-ast",
  "kairo-interpreter",
  "kairo-lexer",
+ "kairo-loader",
  "kairo-parser",
  "kairo-typecheck",
 ]
