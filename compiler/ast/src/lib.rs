@@ -22,12 +22,14 @@ pub struct Program {
 pub struct StructDecl {
     pub name: String,
     pub fields: Vec<Param>,
+    pub is_exported: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnumDecl {
     pub name: String,
     pub variants: Vec<EnumVariant>,
+    pub is_exported: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,6 +49,7 @@ pub struct FunctionDecl {
     /// function returns Unit.
     pub return_type: Option<String>,
     pub body: Vec<Stmt>,
+    pub is_exported: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
