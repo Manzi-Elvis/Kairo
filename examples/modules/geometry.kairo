@@ -1,0 +1,12 @@
+module geometry
+
+export struct Point {
+    x: Int,
+    y: Int
+}
+
+export fn distanceSquared(a: Point, b: Point) -> Int {
+    dx := a.x - b.x
+    dy := a.y - b.y
+    return dx * dx + dy * dy
+}
