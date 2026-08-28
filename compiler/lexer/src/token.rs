@@ -14,6 +14,9 @@ pub enum TokenKind {
     False,
     Enum,
     Match,
+    Module,
+    Import,
+    Export,
 
     // Literals
     Identifier(String),
