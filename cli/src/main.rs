@@ -1,11 +1,9 @@
 use std::env;
-use std::fs;
 use std::process::ExitCode;
-use kairo_typecheck::TypeChecker;
 
 use kairo_interpreter::Interpreter;
-use kairo_lexer::Lexer;
-use kairo_parser::Parser;
+use kairo_loader::{load_program, LoadError, ModuleSource};
+use kairo_typecheck::TypeChecker;
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
@@ -42,15 +40,7 @@ fn run_command(args: &[String]) -> ExitCode {
         return ExitCode::FAILURE;
     };
 
-    let source = match fs::read_to_string(path) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("error: could not read `{path}`: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-
-    let program = match compile(&source) {
+    let program = match compile(path) {
         Ok(p) => p,
         Err(msg) => {
             eprintln!("{msg}");
@@ -75,15 +65,7 @@ fn check_command(args: &[String]) -> ExitCode {
         return ExitCode::FAILURE;
     };
 
-    let source = match fs::read_to_string(path) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("error: could not read `{path}`: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-
-    match compile(&source) {
+    match compile(path) {
         Ok(_) => {
             println!("ok: no errors found");
             ExitCode::SUCCESS
@@ -95,16 +77,33 @@ fn check_command(args: &[String]) -> ExitCode {
     }
 }
 
-/// Lex + parse a source string into an AST, formatting any failure
-/// as a single human-readable error message.
-fn compile(source: &str) -> Result<kairo_ast::Program, String> {
-    let tokens = Lexer::new(source)
-        .tokenize()
-        .map_err(|e| format!("lex error: {e:?}"))?;
+struct FsModuleSource {
+    dir: std::path::PathBuf,
+}
 
-    let program = Parser::new(tokens)
-        .parse_program()
-        .map_err(|e| format!("parse error: {e:?}"))?;
+impl ModuleSource for FsModuleSource {
+    fn read_module(&self, name: &str) -> Result<String, LoadError> {
+        let path = self.dir.join(format!("{name}.kairo"));
+        std::fs::read_to_string(&path)
+            .map_err(|e| LoadError::Io(format!("{}: {}", path.display(), e)))
+    }
+}
+
+fn compile(path: &str) -> Result<kairo_ast::Program, String> {
+    let path_buf = std::path::Path::new(path);
+    let dir = path_buf
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .to_path_buf();
+    let entry_name = path_buf
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("main")
+        .to_string();
+
+    let source = FsModuleSource { dir };
+    let program = load_program(&entry_name, &source).map_err(|e| format!("load error: {e:?}"))?;
 
     TypeChecker::new().check_program(&program).map_err(|errors| {
         errors

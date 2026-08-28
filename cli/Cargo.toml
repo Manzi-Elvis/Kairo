@@ -16,3 +16,4 @@ kairo-lexer = { path = "../compiler/lexer" }
 kairo-parser = { path = "../compiler/parser" }
 kairo-interpreter = { path = "../compiler/interpreter" }
 kairo-typecheck = { path = "../compiler/typecheck" }
+kairo-loader = { path = "../compiler/loader" }
