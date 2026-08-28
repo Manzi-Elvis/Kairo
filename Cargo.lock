@@ -9,6 +9,7 @@ dependencies = [
  "kairo-ast",
  "kairo-interpreter",
  "kairo-lexer",
+ "kairo-loader",
  "kairo-parser",
  "kairo-typecheck",
 ]
@@ -29,6 +30,15 @@ dependencies = [
 [[package]]
 name = "kairo-lexer"
 version = "0.1.0"
+
+[[package]]
+name = "kairo-loader"
+version = "0.1.0"
+dependencies = [
+ "kairo-ast",
+ "kairo-lexer",
+ "kairo-parser",
+]
 
 [[package]]
 name = "kairo-parser"
