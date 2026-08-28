@@ -35,28 +35,47 @@ impl Parser {
     }
 
     pub fn parse_program(mut self) -> Result<Program, ParseError> {
+        let module_name = if self.check(&TokenKind::Module) {
+            self.advance();
+            Some(self.expect_identifier()?)
+        } else {
+            None
+        };
+
+        let mut imports = Vec::new();
+        while self.check(&TokenKind::Import) {
+            self.advance();
+            imports.push(self.expect_identifier()?);
+        }
+
         let mut structs = Vec::new();
         let mut enums = Vec::new();
         let mut functions = Vec::new();
         while !self.check(&TokenKind::Eof) {
-            if self.check(&TokenKind::Struct) {
-                structs.push(self.parse_struct_decl()?);
-            } else if self.check(&TokenKind::Enum) {
-                enums.push(self.parse_enum_decl()?);
+            let is_exported = if self.check(&TokenKind::Export) {
+                self.advance();
+                true
             } else {
-                functions.push(self.parse_function_decl()?);
+                false
+            };
+            if self.check(&TokenKind::Struct) {
+                structs.push(self.parse_struct_decl(is_exported)?);
+            } else if self.check(&TokenKind::Enum) {
+                enums.push(self.parse_enum_decl(is_exported)?);
+            } else {
+                functions.push(self.parse_function_decl(is_exported)?);
             }
         }
-        Ok(Program { structs, enums, functions })
+        Ok(Program { module_name, imports, structs, enums, functions })
     }
 
-    fn parse_struct_decl(&mut self) -> Result<StructDecl, ParseError> {
+    fn parse_struct_decl(&mut self, is_exported: bool) -> Result<StructDecl, ParseError> {
         self.expect(&TokenKind::Struct, "struct")?;
         let name = self.expect_identifier()?;
         self.expect(&TokenKind::LBrace, "{")?;
         let fields = self.parse_struct_fields()?;
         self.expect(&TokenKind::RBrace, "}")?;
-        Ok(StructDecl { name, fields })
+        Ok(StructDecl { name, fields, is_exported })
     }
 
     fn parse_struct_fields(&mut self) -> Result<Vec<Param>, ParseError> {
@@ -72,25 +91,21 @@ impl Parser {
         Ok(fields)
     }
 
-    fn parse_enum_decl(&mut self) -> Result<EnumDecl, ParseError> {
+    fn parse_enum_decl(&mut self, is_exported: bool) -> Result<EnumDecl, ParseError> {
         self.expect(&TokenKind::Enum, "enum")?;
         let name = self.expect_identifier()?;
         self.expect(&TokenKind::LBrace, "{")?;
-
         let mut variants = Vec::new();
         if !self.check(&TokenKind::RBrace) {
             variants.push(self.parse_enum_variant()?);
             while self.check(&TokenKind::Comma) {
                 self.advance();
-                if self.check(&TokenKind::RBrace) {
-                    break; // trailing comma
-                }
+                if self.check(&TokenKind::RBrace) { break; }
                 variants.push(self.parse_enum_variant()?);
             }
         }
-
         self.expect(&TokenKind::RBrace, "}")?;
-        Ok(EnumDecl { name, variants })
+        Ok(EnumDecl { name, variants, is_exported })
     }
 
     fn parse_enum_variant(&mut self) -> Result<EnumVariant, ParseError> {
@@ -119,30 +134,22 @@ impl Parser {
         Ok(fields)
     }
 
-    fn parse_function_decl(&mut self) -> Result<FunctionDecl, ParseError> {
+    fn parse_function_decl(&mut self, is_exported: bool) -> Result<FunctionDecl, ParseError> {
         self.expect(&TokenKind::Fn, "fn")?;
         let name = self.expect_identifier()?;
         self.expect(&TokenKind::LParen, "(")?;
         let params = self.parse_params()?;
         self.expect(&TokenKind::RParen, ")")?;
-
         let return_type = if self.check(&TokenKind::Arrow) {
             self.advance();
             Some(self.expect_identifier()?)
         } else {
             None
         };
-
         self.expect(&TokenKind::LBrace, "{")?;
         let body = self.parse_block_stmts()?;
         self.expect(&TokenKind::RBrace, "}")?;
-
-        Ok(FunctionDecl {
-            name,
-            params,
-            return_type,
-            body,
-        })
+        Ok(FunctionDecl { name, params, return_type, body, is_exported })
     }
 
     fn parse_params(&mut self) -> Result<Vec<Param>, ParseError> {
@@ -1155,5 +1162,14 @@ mod tests {
             *value,
             Expr::Try(Box::new(Expr::Call { callee: "doThing".to_string(), args: vec![] }))
         );
+    }
+
+    #[test]
+    fn parses_module_header_imports_and_export() {
+        let program = parse("module main\nimport geometry\nexport fn f() {}\nfn g() {}").unwrap();
+        assert_eq!(program.module_name, Some("main".to_string()));
+        assert_eq!(program.imports, vec!["geometry".to_string()]);
+        assert!(program.functions[0].is_exported);
+        assert!(!program.functions[1].is_exported);
     }
 }

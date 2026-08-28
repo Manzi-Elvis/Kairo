@@ -121,6 +121,9 @@ impl Lexer {
             "false" => TokenKind::False,
             "enum" => TokenKind::Enum,
             "match" => TokenKind::Match,
+            "module" => TokenKind::Module,
+            "import" => TokenKind::Import,
+            "export" => TokenKind::Export,
             _ => TokenKind::Identifier(ident),
             
         }
@@ -495,6 +498,21 @@ mod tests {
         assert_eq!(
             kinds,
             vec![TokenKind::Identifier("x".into()), TokenKind::Question, TokenKind::Eof]
+        );
+    }
+
+    #[test]
+    fn tokenizes_module_import_export() {
+        let kinds = kinds("module foo\nimport bar\nexport fn f() {}");
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::Module, TokenKind::Identifier("foo".into()),
+                TokenKind::Import, TokenKind::Identifier("bar".into()),
+                TokenKind::Export, TokenKind::Fn, TokenKind::Identifier("f".into()),
+                TokenKind::LParen, TokenKind::RParen, TokenKind::LBrace, TokenKind::RBrace,
+                TokenKind::Eof,
+            ]
         );
     }
 }

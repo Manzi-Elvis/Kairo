@@ -281,3 +281,21 @@ Err(error: String)
 `?` works on any enum shaped this way, regardless of its name. Real
 generics would let one `Result<T, E>` cover every case — worth
 revisiting once generics exist.
+
+---
+
+# Kairo v0.12: modules, imports, export
+
+## New syntax
+- `module Name` — optional file header; if present, must match the
+  file's name (without `.kairo`), enforced by the CLI
+- `import Name` — loads the sibling file `Name.kairo` in the same
+  directory and merges its exported declarations in
+- `export` — prefix on `struct`/`enum`/`fn` to make it importable
+
+## Visibility rule
+A file's own code may use its own declarations freely, exported or
+not. To use a declaration from another file, that file must be
+directly imported (not just transitively reachable) and the
+declaration must be `export`ed. Violating either rule is a
+`SymbolNotAccessible` error at `kairo check`/`run` time.
