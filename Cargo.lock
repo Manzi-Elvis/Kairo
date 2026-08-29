@@ -19,6 +19,15 @@ name = "kairo-ast"
 version = "0.1.0"
 
 [[package]]
+name = "kairo-hir"
+version = "0.1.0"
+dependencies = [
+ "kairo-ast",
+ "kairo-lexer",
+ "kairo-parser",
+]
+
+[[package]]
 name = "kairo-interpreter"
 version = "0.1.0"
 dependencies = [

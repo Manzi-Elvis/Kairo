@@ -299,3 +299,30 @@ not. To use a declaration from another file, that file must be
 directly imported (not just transitively reachable) and the
 declaration must be `export`ed. Violating either rule is a
 `SymbolNotAccessible` error at `kairo check`/`run` time.
+
+---
+
+# Kairo v0.13: HIR (compiler-internal, no new syntax)
+
+A new `kairo-hir` crate lowers the AST into a desugared High-level
+IR (spec section 57), currently exercised as a standalone, tested
+compiler pass — not yet wired into `kairo run`/`check` in place of
+the AST-walking interpreter.
+
+## What's lowered
+- `match` statements → nested `if`/`else` chains using two new HIR
+  node kinds: `IsVariant` (tag test) and `VariantField` (positional
+  field extraction). The `Pattern` concept from the AST does not
+  exist at this level. The match scrutinee is evaluated once into a
+  generated temporary (`__match_scrutinee_N`), matching how a real
+  compiler avoids re-evaluating it per arm.
+
+## What's NOT lowered (documented limitation)
+- `?` (`Expr::Try`) passes through unchanged. Desugaring it requires
+  knowing which enum the inner expression evaluates to, which is
+  type information — this lowering pass is purely syntactic and has
+  no type checker integration. Revisit once HIR carries inferred
+  types.
+- MIR (ownership, borrows, moves, drops — section 58) is out of
+  scope. It only earns its keep in service of a native-codegen
+  backend, which does not exist yet (`kairo build` is still a stub).
