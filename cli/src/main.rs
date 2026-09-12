@@ -1,6 +1,6 @@
 use std::env;
 use std::process::ExitCode;
-
+use kairo_hir::lower_program;
 use kairo_interpreter::Interpreter;
 use kairo_loader::{load_program, LoadError, ModuleSource};
 use kairo_typecheck::TypeChecker;
@@ -40,13 +40,14 @@ fn run_command(args: &[String]) -> ExitCode {
         return ExitCode::FAILURE;
     };
 
-    let program = match compile(path) {
+    let ast_program = match compile(path) {
         Ok(p) => p,
         Err(msg) => {
             eprintln!("{msg}");
             return ExitCode::FAILURE;
         }
     };
+    let program = lower_program(&ast_program);
 
     let mut sink = |s: &str| println!("{s}");
     let mut interpreter = Interpreter::new(&mut sink);
