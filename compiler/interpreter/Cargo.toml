@@ -8,6 +8,7 @@ description = "Tree-walking interpreter for Kairo v0.1 milestone scope"
 
 [dependencies]
 kairo-ast = { path = "../ast" }
+kairo-hir = { path = "../hir" }
 
 [dev-dependencies]
 kairo-lexer = { path = "../lexer" }

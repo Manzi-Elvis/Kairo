@@ -32,6 +32,7 @@ name = "kairo-interpreter"
 version = "0.1.0"
 dependencies = [
  "kairo-ast",
+ "kairo-hir",
  "kairo-lexer",
  "kairo-parser",
 ]
