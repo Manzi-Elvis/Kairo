@@ -326,3 +326,22 @@ the AST-walking interpreter.
 - MIR (ownership, borrows, moves, drops — section 58) is out of
   scope. It only earns its keep in service of a native-codegen
   backend, which does not exist yet (`kairo build` is still a stub).
+
+  
+---
+
+# Kairo v0.14: HIR wired into execution
+
+`kairo run` now executes the lowered HIR instead of the raw AST:
+source → lex → parse → typecheck (AST) → lower (HIR) → interpret (HIR)
+
+`kairo check` is unchanged — it only performs lex/parse/typecheck on
+the AST (needed since exhaustiveness checking operates on
+`Pattern`/`Stmt::Match`, which no longer exist once lowered).
+
+`match` statements are eliminated entirely by the time the
+interpreter runs: they become `if`/`else` chains testing `IsVariant`
+and extracting fields via `VariantField`. This means
+`RuntimeError::NonExhaustiveMatch` no longer exists as a possible
+runtime outcome — the type checker's static exhaustiveness check
+(section on match, v0.9) is now the sole enforcement point.
