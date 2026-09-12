@@ -7,6 +7,7 @@ name = "kairo"
 version = "0.1.0"
 dependencies = [
  "kairo-ast",
+ "kairo-hir",
  "kairo-interpreter",
  "kairo-lexer",
  "kairo-loader",
