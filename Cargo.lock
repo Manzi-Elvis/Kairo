@@ -7,6 +7,7 @@ name = "kairo"
 version = "0.1.0"
 dependencies = [
  "kairo-ast",
+ "kairo-codegen",
  "kairo-hir",
  "kairo-interpreter",
  "kairo-lexer",
@@ -18,6 +19,16 @@ dependencies = [
 [[package]]
 name = "kairo-ast"
 version = "0.1.0"
+
+[[package]]
+name = "kairo-codegen"
+version = "0.1.0"
+dependencies = [
+ "kairo-ast",
+ "kairo-hir",
+ "kairo-lexer",
+ "kairo-parser",
+]
 
 [[package]]
 name = "kairo-hir"
