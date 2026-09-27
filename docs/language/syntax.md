@@ -345,3 +345,35 @@ and extracting fields via `VariantField`. This means
 `RuntimeError::NonExhaustiveMatch` no longer exists as a possible
 runtime outcome — the type checker's static exhaustiveness check
 (section on match, v0.9) is now the sole enforcement point.
+
+
+---
+
+# Kairo v0.15: native compilation (Int/Bool subset)
+
+`kairo build <file>` now produces a real native executable via:
+source → lex → parse → typecheck (AST) → lower (HIR) → codegen (LLVM IR) → clang → executable
+
+## Supported in native codegen
+- `Int` (32-bit), `Bool`
+- Arithmetic (`+ - * /`), comparisons, equality
+- Functions with `Int`/`Bool` params and return types, including recursion
+- `if`/`else`, `while`
+- `print` for `Int` and `Bool`
+
+## Not yet supported natively (rejected with a clear codegen error)
+- `String`, structs, enums, arrays, `match`, `?`, modules — these
+  still run correctly under `kairo run` (the interpreter), just not
+  under `kairo build` yet. Each will be added to codegen in a future
+  slice, the same way the interpreter grew feature by feature.
+
+## Known limitations
+- Native `Int` is 32-bit, unlike the interpreter's 64-bit `Int`
+  (kept simple for portable `printf` formatting).
+- Division by zero is undefined behavior in native code (LLVM's
+  `sdiv`), unlike the interpreter's clean `DivisionByZero` error.
+- A function that doesn't return on every code path gets a silent
+  default return (0/false/void) in native code — a pre-existing gap
+  in the type checker (it doesn't verify all paths return), now
+  more consequential for codegen than for the interpreter.
+- Requires `clang` installed and on `PATH`.
