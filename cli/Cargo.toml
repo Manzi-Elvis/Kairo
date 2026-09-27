@@ -18,3 +18,4 @@ kairo-interpreter = { path = "../compiler/interpreter" }
 kairo-typecheck = { path = "../compiler/typecheck" }
 kairo-loader = { path = "../compiler/loader" }
 kairo-hir = { path = "../compiler/hir" }
+kairo-codegen = { path = "../compiler/codegen" }
