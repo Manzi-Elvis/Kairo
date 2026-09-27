@@ -1,0 +1,15 @@
+[package]
+name = "kairo-codegen"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "LLVM textual IR codegen for the Kairo programming language (Int/Bool subset)"
+
+[dependencies]
+kairo-ast = { path = "../ast" }
+kairo-hir = { path = "../hir" }
+
+[dev-dependencies]
+kairo-lexer = { path = "../lexer" }
+kairo-parser = { path = "../parser" }

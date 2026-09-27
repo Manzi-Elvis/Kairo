@@ -3,3 +3,5 @@
 .DS_Store
 *.pdb
 Cargo.lock.bak
+*.ll
+examples/**/*.exe
