@@ -33,6 +33,7 @@ pub enum CodegenError {
 enum LType {
     I32,
     I1,
+    Str,
     Void,
 }
 
@@ -41,6 +42,7 @@ impl LType {
         match self {
             LType::I32 => "i32",
             LType::I1 => "i1",
+            LType::Str => "i8*",
             LType::Void => "void",
         }
     }
@@ -49,6 +51,7 @@ impl LType {
         match name {
             "Int" => Ok(LType::I32),
             "Bool" => Ok(LType::I1),
+            "String" => Ok(LType::Str),
             other => Err(CodegenError::UnsupportedType(other.to_string())),
         }
     }
@@ -85,9 +88,28 @@ pub fn generate(program: &HProgram) -> Result<String, CodegenError> {
 
     let mut out = Vec::new();
     out.push("declare i32 @printf(i8*, ...)".to_string());
+    out.push("declare i64 @strlen(i8*)".to_string());
+    out.push("declare i8* @malloc(i64)".to_string());
+    out.push("declare i8* @strcpy(i8*, i8*)".to_string());
+    out.push("declare i8* @strcat(i8*, i8*)".to_string());
+    out.push("declare i32 @strcmp(i8*, i8*)".to_string());
     out.push(r#"@.int_fmt = private unnamed_addr constant [4 x i8] c"%d\0A\00""#.to_string());
+    out.push(r#"@.str_fmt = private unnamed_addr constant [4 x i8] c"%s\0A\00""#.to_string());
     out.push(r#"@.true_str = private unnamed_addr constant [6 x i8] c"true\0A\00""#.to_string());
     out.push(r#"@.false_str = private unnamed_addr constant [7 x i8] c"false\0A\00""#.to_string());
+
+    // Every distinct string literal becomes its own global constant,
+    // deduped by content so the same literal used twice reuses one
+    // global. Concatenation/equality happen at runtime on heap
+    // buffers (see gen_binary); literals themselves need no
+    // allocation.
+    let mut string_globals: HashMap<String, (String, usize)> = HashMap::new();
+    for (i, s) in collect_string_literals(program).into_iter().enumerate() {
+        let label = format!("@.str{}", i + 1);
+        let (escaped, len) = llvm_escape_string(&s);
+        out.push(format!("{label} = private unnamed_addr constant [{len} x i8] c\"{escaped}\""));
+        string_globals.insert(s, (label, len));
+    }
     out.push(String::new());
 
     for f in &program.functions {
@@ -95,7 +117,7 @@ pub fn generate(program: &HProgram) -> Result<String, CodegenError> {
             continue;
         }
         let sig = fn_sigs.get(&f.name).expect("signature precomputed");
-        let mut gen = FnCodegen::new(&fn_sigs);
+        let mut gen = FnCodegen::new(&fn_sigs, &string_globals);
         out.push(gen.generate_function(f, sig)?);
         out.push(String::new());
     }
@@ -104,13 +126,10 @@ pub fn generate(program: &HProgram) -> Result<String, CodegenError> {
     let main_sig = fn_sigs.get("main").expect("signature precomputed");
     let mut renamed = kairo_main.clone();
     renamed.name = "kairo_main".to_string();
-    let mut gen = FnCodegen::new(&fn_sigs);
+    let mut gen = FnCodegen::new(&fn_sigs, &string_globals);
     out.push(gen.generate_function(&renamed, main_sig)?);
     out.push(String::new());
 
-    // Kairo's main is emitted as @kairo_main (often void-returning);
-    // this wraps it to satisfy the C ABI entry point's required
-    // `i32 @main()` signature.
     out.push("define i32 @main() {".to_string());
     out.push("entry:".to_string());
     out.push("  call void @kairo_main()".to_string());
@@ -120,8 +139,110 @@ pub fn generate(program: &HProgram) -> Result<String, CodegenError> {
     Ok(out.join("\n"))
 }
 
+/// Escapes a Rust string into LLVM IR's `c"..."` constant syntax
+/// (byte-by-byte, so multi-byte UTF-8 is handled correctly) and
+/// returns it alongside the total byte length including the null
+/// terminator.
+fn llvm_escape_string(s: &str) -> (String, usize) {
+    let mut out = String::new();
+    let mut len = 0;
+    for byte in s.bytes() {
+        len += 1;
+        match byte {
+            b'\\' => out.push_str("\\5C"),
+            b'"' => out.push_str("\\22"),
+            0x20..=0x7E => out.push(byte as char),
+            other => out.push_str(&format!("\\{other:02X}")),
+        }
+    }
+    len += 1;
+    out.push_str("\\00");
+    (out, len)
+}
+
+fn collect_string_literals(program: &HProgram) -> Vec<String> {
+    let mut found = Vec::new();
+    for f in &program.functions {
+        collect_in_stmts(&f.body, &mut found);
+    }
+    found
+}
+
+fn collect_in_stmts(stmts: &[HStmt], found: &mut Vec<String>) {
+    for s in stmts {
+        collect_in_stmt(s, found);
+    }
+}
+
+fn collect_in_stmt(stmt: &HStmt, found: &mut Vec<String>) {
+    match stmt {
+        HStmt::VariableDecl { value, .. } => collect_in_expr(value, found),
+        HStmt::Assign { value, .. } => collect_in_expr(value, found),
+        HStmt::IndexAssign { index, value, .. } => {
+            collect_in_expr(index, found);
+            collect_in_expr(value, found);
+        }
+        HStmt::Expr(e) => collect_in_expr(e, found),
+        HStmt::If { condition, then_branch, else_branch } => {
+            collect_in_expr(condition, found);
+            collect_in_stmts(then_branch, found);
+            if let Some(b) = else_branch {
+                collect_in_stmts(b, found);
+            }
+        }
+        HStmt::While { condition, body } => {
+            collect_in_expr(condition, found);
+            collect_in_stmts(body, found);
+        }
+        HStmt::Return(expr) => {
+            if let Some(e) = expr {
+                collect_in_expr(e, found);
+            }
+        }
+    }
+}
+
+fn collect_in_expr(expr: &HExpr, found: &mut Vec<String>) {
+    match expr {
+        HExpr::StringLiteral(s) => {
+            if !found.contains(s) {
+                found.push(s.clone());
+            }
+        }
+        HExpr::IntLiteral(_) | HExpr::BoolLiteral(_) | HExpr::Identifier(_) => {}
+        HExpr::Binary { left, right, .. } => {
+            collect_in_expr(left, found);
+            collect_in_expr(right, found);
+        }
+        HExpr::Call { args, .. } => {
+            for a in args {
+                collect_in_expr(a, found);
+            }
+        }
+        HExpr::StructLiteral { fields, .. } | HExpr::EnumLiteral { fields, .. } => {
+            for (_, e) in fields {
+                collect_in_expr(e, found);
+            }
+        }
+        HExpr::FieldAccess { object, .. } => collect_in_expr(object, found),
+        HExpr::ArrayLiteral(elements) => {
+            for e in elements {
+                collect_in_expr(e, found);
+            }
+        }
+        HExpr::Index { array, index } => {
+            collect_in_expr(array, found);
+            collect_in_expr(index, found);
+        }
+        HExpr::Try(inner) => collect_in_expr(inner, found),
+        HExpr::IsVariant { scrutinee, .. } => collect_in_expr(scrutinee, found),
+        HExpr::VariantField { scrutinee, .. } => collect_in_expr(scrutinee, found),
+    }
+}
+
 struct FnCodegen<'a> {
     fn_sigs: &'a HashMap<String, FnSig>,
+    strings: &'a HashMap<String, (String, usize)>,
     locals: HashMap<String, (String, LType)>,
     lines: Vec<String>,
     temp_counter: usize,
@@ -130,9 +251,10 @@ struct FnCodegen<'a> {
 }
 
 impl<'a> FnCodegen<'a> {
-    fn new(fn_sigs: &'a HashMap<String, FnSig>) -> Self {
+    fn new(fn_sigs: &'a HashMap<String, FnSig>, strings: &'a HashMap<String, (String, usize)>) -> Self {
         Self {
             fn_sigs,
+            strings,
             locals: HashMap::new(),
             lines: Vec::new(),
             temp_counter: 0,
@@ -199,6 +321,7 @@ impl<'a> FnCodegen<'a> {
                 LType::Void => self.lines.push("  ret void".to_string()),
                 LType::I32 => self.lines.push("  ret i32 0".to_string()),
                 LType::I1 => self.lines.push("  ret i1 0".to_string()),
+                LType::Str => self.lines.push("  ret i8* null".to_string()),
             }
         }
         self.lines.push("}".to_string());
@@ -317,9 +440,18 @@ impl<'a> FnCodegen<'a> {
         match expr {
             HExpr::IntLiteral(v) => Ok((v.to_string(), LType::I32)),
             HExpr::BoolLiteral(b) => Ok((if *b { "1" } else { "0" }.to_string(), LType::I1)),
-            HExpr::StringLiteral(_) => Err(CodegenError::UnsupportedFeature(
-                "strings are not yet supported in native codegen".to_string(),
-            )),
+            HExpr::StringLiteral(s) => {
+                let (label, len) = self
+                    .strings
+                    .get(s)
+                    .cloned()
+                    .expect("string literal precollected by collect_string_literals");
+                let t = self.fresh_temp();
+                self.emit(format!(
+                    "  {t} = getelementptr [{len} x i8], [{len} x i8]* {label}, i32 0, i32 0"
+                ));
+                Ok((t, LType::Str))
+            }
             HExpr::Identifier(name) => {
                 let (slot, ty) = self
                     .locals
@@ -354,29 +486,64 @@ impl<'a> FnCodegen<'a> {
     ) -> Result<(String, LType), CodegenError> {
         let (l, lty) = self.gen_expr(left)?;
         let (r, _) = self.gen_expr(right)?;
-        let t = self.fresh_temp();
 
         use BinaryOp::*;
-        let (instr, result_ty) = match op {
-            Add => (format!("add i32 {l}, {r}"), LType::I32),
-            Sub => (format!("sub i32 {l}, {r}"), LType::I32),
-            Mul => (format!("mul i32 {l}, {r}"), LType::I32),
-            Div => (format!("sdiv i32 {l}, {r}"), LType::I32),
-            Lt => (format!("icmp slt i32 {l}, {r}"), LType::I1),
-            Gt => (format!("icmp sgt i32 {l}, {r}"), LType::I1),
-            Le => (format!("icmp sle i32 {l}, {r}"), LType::I1),
-            Ge => (format!("icmp sge i32 {l}, {r}"), LType::I1),
-            Eq => {
-                let ty = if lty == LType::I1 { "i1" } else { "i32" };
-                (format!("icmp eq {ty} {l}, {r}"), LType::I1)
+        match op {
+            Add if lty == LType::Str => {
+                let len_a = self.fresh_temp();
+                self.emit(format!("  {len_a} = call i64 @strlen(i8* {l})"));
+                let len_b = self.fresh_temp();
+                self.emit(format!("  {len_b} = call i64 @strlen(i8* {r})"));
+                let total = self.fresh_temp();
+                self.emit(format!("  {total} = add i64 {len_a}, {len_b}"));
+                let total1 = self.fresh_temp();
+                self.emit(format!("  {total1} = add i64 {total}, 1"));
+                let buf = self.fresh_temp();
+                self.emit(format!("  {buf} = call i8* @malloc(i64 {total1})"));
+                let copy_res = self.fresh_temp();
+                self.emit(format!("  {copy_res} = call i8* @strcpy(i8* {buf}, i8* {l})"));
+                let cat_res = self.fresh_temp();
+                self.emit(format!("  {cat_res} = call i8* @strcat(i8* {buf}, i8* {r})"));
+                Ok((buf, LType::Str))
             }
-            NotEq => {
-                let ty = if lty == LType::I1 { "i1" } else { "i32" };
-                (format!("icmp ne {ty} {l}, {r}"), LType::I1)
+            Eq if lty == LType::Str => {
+                let cmp = self.fresh_temp();
+                self.emit(format!("  {cmp} = call i32 @strcmp(i8* {l}, i8* {r})"));
+                let t = self.fresh_temp();
+                self.emit(format!("  {t} = icmp eq i32 {cmp}, 0"));
+                Ok((t, LType::I1))
             }
-        };
-        self.emit(format!("  {t} = {instr}"));
-        Ok((t, result_ty))
+            NotEq if lty == LType::Str => {
+                let cmp = self.fresh_temp();
+                self.emit(format!("  {cmp} = call i32 @strcmp(i8* {l}, i8* {r})"));
+                let t = self.fresh_temp();
+                self.emit(format!("  {t} = icmp ne i32 {cmp}, 0"));
+                Ok((t, LType::I1))
+            }
+            _ => {
+                let t = self.fresh_temp();
+                let (instr, result_ty) = match op {
+                    Add => (format!("add i32 {l}, {r}"), LType::I32),
+                    Sub => (format!("sub i32 {l}, {r}"), LType::I32),
+                    Mul => (format!("mul i32 {l}, {r}"), LType::I32),
+                    Div => (format!("sdiv i32 {l}, {r}"), LType::I32),
+                    Lt => (format!("icmp slt i32 {l}, {r}"), LType::I1),
+                    Gt => (format!("icmp sgt i32 {l}, {r}"), LType::I1),
+                    Le => (format!("icmp sle i32 {l}, {r}"), LType::I1),
+                    Ge => (format!("icmp sge i32 {l}, {r}"), LType::I1),
+                    Eq => {
+                        let ty = if lty == LType::I1 { "i1" } else { "i32" };
+                        (format!("icmp eq {ty} {l}, {r}"), LType::I1)
+                    }
+                    NotEq => {
+                        let ty = if lty == LType::I1 { "i1" } else { "i32" };
+                        (format!("icmp ne {ty} {l}, {r}"), LType::I1)
+                    }
+                };
+                self.emit(format!("  {t} = {instr}"));
+                Ok((t, result_ty))
+            }
+        }
     }
 
     fn gen_call(&mut self, callee: &str, args: &[HExpr]) -> Result<(String, LType), CodegenError> {
@@ -424,6 +591,16 @@ impl<'a> FnCodegen<'a> {
                     self.emit(format!("  br label %{end_label}"));
 
                     self.start_block(&end_label);
+                }
+                LType::Str => {
+                    let fmt_ptr = self.fresh_temp();
+                    self.emit(format!(
+                        "  {fmt_ptr} = getelementptr [4 x i8], [4 x i8]* @.str_fmt, i32 0, i32 0"
+                    ));
+                    let t = self.fresh_temp();
+                    self.emit(format!(
+                        "  {t} = call i32 (i8*, ...) @printf(i8* {fmt_ptr}, i8* {val})"
+                    ));
                 }
                 LType::Void => unreachable!("print argument cannot be void"),
             }
@@ -527,12 +704,6 @@ mod tests {
     }
 
     #[test]
-    fn rejects_string_literals() {
-        let err = gen_source(r#"fn main() { x := "hi" }"#).unwrap_err();
-        assert!(matches!(err, CodegenError::UnsupportedFeature(_)));
-    }
-
-    #[test]
     fn rejects_struct_declarations() {
         let err = gen_source("struct Point { x: Int }\nfn main() {}").unwrap_err();
         assert!(matches!(err, CodegenError::UnsupportedFeature(_)));
@@ -542,5 +713,36 @@ mod tests {
     fn rejects_missing_main() {
         let err = gen_source("fn notMain() {}").unwrap_err();
         assert_eq!(err, CodegenError::NoMainFunction);
+    }
+
+    #[test]
+    fn generates_string_literal_and_print() {
+        let ir = gen_source(r#"fn main() { print("hi") }"#).unwrap();
+        assert!(ir.contains("@.str1 = private unnamed_addr constant"));
+        assert!(ir.contains("@.str_fmt"));
+        assert!(ir.contains("call i32 (i8*, ...) @printf(i8*"));
+    }
+
+    #[test]
+    fn dedupes_repeated_string_literals() {
+        let ir = gen_source(r#"fn main() { print("hi")\nprint("hi") }"#.replace("\\n", "\n").as_str()).unwrap();
+        assert!(ir.contains("@.str1"));
+        assert!(!ir.contains("@.str2"));
+    }
+
+    #[test]
+    fn generates_string_concatenation() {
+        let ir = gen_source(r#"fn main() { x := "a" + "b"\nprint(x) }"#.replace("\\n", "\n").as_str()).unwrap();
+        assert!(ir.contains("call i64 @strlen"));
+        assert!(ir.contains("call i8* @malloc"));
+        assert!(ir.contains("call i8* @strcpy"));
+        assert!(ir.contains("call i8* @strcat"));
+    }
+
+    #[test]
+    fn generates_string_equality_via_strcmp() {
+        let ir = gen_source(r#"fn main() { print("a" == "b") }"#).unwrap();
+        assert!(ir.contains("call i32 @strcmp"));
+        assert!(ir.contains("icmp eq i32"));
     }
 }
