@@ -377,3 +377,25 @@ source → lex → parse → typecheck (AST) → lower (HIR) → codegen (LLVM I
   in the type checker (it doesn't verify all paths return), now
   more consequential for codegen than for the interpreter.
 - Requires `clang` installed and on `PATH`.
+
+---
+
+# Kairo v0.16: native String support
+
+`kairo build` now supports `String`: literals, `+` concatenation,
+`==`/`!=` equality (via `strcmp`), passing/returning strings through
+functions, and `print(String)`.
+
+## Implementation notes
+- String literals become deduplicated global constants in the
+  emitted `.ll`.
+- Concatenation allocates a new buffer via `malloc` + `strlen` +
+  `strcpy` + `strcat` at runtime.
+- **Memory is never freed** — every heap allocation leaks for the
+  process's lifetime. This is an explicit, scoped first pass (same
+  pattern as every other documented limitation in this project): a
+  real memory strategy (refcounting, arena, GC) is future work, not
+  attempted here.
+
+## Still not supported natively
+Structs, enums, arrays, match, `?`, modules — unchanged from v0.15.
