@@ -1,24 +1,27 @@
 //! Emits textual LLVM IR for a restricted subset of Kairo: Int/Bool
-//! values, arithmetic, comparisons, user functions (with recursion),
-//! if/while, and print. Strings, structs, enums, arrays, match, and
+//! String, struct values, arithmetic, comparisons, user functions
+//! (with recursion), if/while, and print. Enums, arrays, match, and
 //! ? are rejected with CodegenError::UnsupportedFeature — deferred
 //! to later codegen slices, matching how the interpreter itself grew
 //! feature by feature.
 //!
-//! Known limitations of this first pass:
-//! - Native Int is 32-bit (i32), unlike the interpreter's 64-bit
-//!   Int, to keep printf's format specifier portable across libc
-//!   implementations without extra work.
-//! - Division by zero is undefined behavior in native code (LLVM
-//!   `sdiv`), unlike the interpreter's clean DivisionByZero error.
+//! Known limitations of this pass:
+//! - Native Int is 32-bit (i32), unlike the interpreter's 64-bit Int.
+//! - Division by zero is undefined behavior in native code.
 //! - A function whose body doesn't explicitly return on every path
-//!   gets a trailing default return (0 / false / void) rather than
-//!   the interpreter's Unit-mismatch behavior — a pre-existing gap
-//!   in the type checker (it doesn't yet verify all paths return).
+//!   gets a trailing default return rather than the interpreter's
+//!   Unit-mismatch behavior.
+//! - All heap allocations (Strings, structs) are leaked via malloc —
+//!   no free, refcounting, or GC yet.
+//! - Struct equality (`==`/`!=`) is not yet implemented: comparing
+//!   two struct pointers natively would compare addresses, not
+//!   field values, which would silently diverge from the
+//!   interpreter's structural equality — so it's rejected outright
+//!   rather than emitting incorrect IR.
 
 use kairo_ast::{BinaryOp, Param};
 use kairo_hir::{HExpr, HFunctionDecl, HProgram, HStmt};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CodegenError {
@@ -29,29 +32,32 @@ pub enum CodegenError {
     NoMainFunction,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum LType {
     I32,
     I1,
     Str,
+    Struct(String),
     Void,
 }
 
 impl LType {
-    fn llvm(self) -> &'static str {
+    fn llvm(&self) -> String {
         match self {
-            LType::I32 => "i32",
-            LType::I1 => "i1",
-            LType::Str => "i8*",
-            LType::Void => "void",
+            LType::I32 => "i32".to_string(),
+            LType::I1 => "i1".to_string(),
+            LType::Str => "i8*".to_string(),
+            LType::Struct(name) => format!("%{name}*"),
+            LType::Void => "void".to_string(),
         }
     }
 
-    fn from_name(name: &str) -> Result<Self, CodegenError> {
+    fn from_name(name: &str, struct_names: &HashSet<String>) -> Result<Self, CodegenError> {
         match name {
             "Int" => Ok(LType::I32),
             "Bool" => Ok(LType::I1),
             "String" => Ok(LType::Str),
+            other if struct_names.contains(other) => Ok(LType::Struct(other.to_string())),
             other => Err(CodegenError::UnsupportedType(other.to_string())),
         }
     }
@@ -62,14 +68,28 @@ struct FnSig {
     ret: LType,
 }
 
+type StructTable = HashMap<String, Vec<(String, LType)>>;
+
 pub fn generate(program: &HProgram) -> Result<String, CodegenError> {
-    if !program.structs.is_empty() || !program.enums.is_empty() {
+    if !program.enums.is_empty() {
         return Err(CodegenError::UnsupportedFeature(
-            "native codegen does not yet support struct/enum declarations".to_string(),
+            "native codegen does not yet support enum declarations".to_string(),
         ));
     }
+
     if !program.functions.iter().any(|f| f.name == "main") {
         return Err(CodegenError::NoMainFunction);
+    }
+
+    let struct_names: HashSet<String> = program.structs.iter().map(|s| s.name.clone()).collect();
+
+    let mut struct_types: StructTable = HashMap::new();
+    for s in &program.structs {
+        let mut fields = Vec::new();
+        for f in &s.fields {
+            fields.push((f.name.clone(), LType::from_name(&f.type_name, &struct_names)?));
+        }
+        struct_types.insert(s.name.clone(), fields);
     }
 
     let mut fn_sigs: HashMap<String, FnSig> = HashMap::new();
@@ -77,10 +97,10 @@ pub fn generate(program: &HProgram) -> Result<String, CodegenError> {
         let params = f
             .params
             .iter()
-            .map(|p: &Param| LType::from_name(&p.type_name))
+            .map(|p: &Param| LType::from_name(&p.type_name, &struct_names))
             .collect::<Result<Vec<_>, _>>()?;
         let ret = match &f.return_type {
-            Some(t) => LType::from_name(t)?,
+            Some(t) => LType::from_name(t, &struct_names)?,
             None => LType::Void,
         };
         fn_sigs.insert(f.name.clone(), FnSig { params, ret });
@@ -93,16 +113,18 @@ pub fn generate(program: &HProgram) -> Result<String, CodegenError> {
     out.push("declare i8* @strcpy(i8*, i8*)".to_string());
     out.push("declare i8* @strcat(i8*, i8*)".to_string());
     out.push("declare i32 @strcmp(i8*, i8*)".to_string());
+
+    for s in &program.structs {
+        let field_types: Vec<String> =
+            struct_types[&s.name].iter().map(|(_, t)| t.llvm()).collect();
+        out.push(format!("%{} = type {{ {} }}", s.name, field_types.join(", ")));
+    }
+
     out.push(r#"@.int_fmt = private unnamed_addr constant [4 x i8] c"%d\0A\00""#.to_string());
     out.push(r#"@.str_fmt = private unnamed_addr constant [4 x i8] c"%s\0A\00""#.to_string());
     out.push(r#"@.true_str = private unnamed_addr constant [6 x i8] c"true\0A\00""#.to_string());
     out.push(r#"@.false_str = private unnamed_addr constant [7 x i8] c"false\0A\00""#.to_string());
 
-    // Every distinct string literal becomes its own global constant,
-    // deduped by content so the same literal used twice reuses one
-    // global. Concatenation/equality happen at runtime on heap
-    // buffers (see gen_binary); literals themselves need no
-    // allocation.
     let mut string_globals: HashMap<String, (String, usize)> = HashMap::new();
     for (i, s) in collect_string_literals(program).into_iter().enumerate() {
         let label = format!("@.str{}", i + 1);
@@ -117,7 +139,7 @@ pub fn generate(program: &HProgram) -> Result<String, CodegenError> {
             continue;
         }
         let sig = fn_sigs.get(&f.name).expect("signature precomputed");
-        let mut gen = FnCodegen::new(&fn_sigs, &string_globals);
+        let mut gen = FnCodegen::new(&fn_sigs, &string_globals, &struct_types);
         out.push(gen.generate_function(f, sig)?);
         out.push(String::new());
     }
@@ -126,7 +148,7 @@ pub fn generate(program: &HProgram) -> Result<String, CodegenError> {
     let main_sig = fn_sigs.get("main").expect("signature precomputed");
     let mut renamed = kairo_main.clone();
     renamed.name = "kairo_main".to_string();
-    let mut gen = FnCodegen::new(&fn_sigs, &string_globals);
+    let mut gen = FnCodegen::new(&fn_sigs, &string_globals, &struct_types);
     out.push(gen.generate_function(&renamed, main_sig)?);
     out.push(String::new());
 
@@ -139,10 +161,6 @@ pub fn generate(program: &HProgram) -> Result<String, CodegenError> {
     Ok(out.join("\n"))
 }
 
-/// Escapes a Rust string into LLVM IR's `c"..."` constant syntax
-/// (byte-by-byte, so multi-byte UTF-8 is handled correctly) and
-/// returns it alongside the total byte length including the null
-/// terminator.
 fn llvm_escape_string(s: &str) -> (String, usize) {
     let mut out = String::new();
     let mut len = 0;
@@ -243,6 +261,7 @@ fn collect_in_expr(expr: &HExpr, found: &mut Vec<String>) {
 struct FnCodegen<'a> {
     fn_sigs: &'a HashMap<String, FnSig>,
     strings: &'a HashMap<String, (String, usize)>,
+    struct_types: &'a StructTable,
     locals: HashMap<String, (String, LType)>,
     lines: Vec<String>,
     temp_counter: usize,
@@ -251,10 +270,15 @@ struct FnCodegen<'a> {
 }
 
 impl<'a> FnCodegen<'a> {
-    fn new(fn_sigs: &'a HashMap<String, FnSig>, strings: &'a HashMap<String, (String, usize)>) -> Self {
+    fn new(
+        fn_sigs: &'a HashMap<String, FnSig>,
+        strings: &'a HashMap<String, (String, usize)>,
+        struct_types: &'a StructTable,
+    ) -> Self {
         Self {
             fn_sigs,
             strings,
+            struct_types,
             locals: HashMap::new(),
             lines: Vec::new(),
             temp_counter: 0,
@@ -273,24 +297,25 @@ impl<'a> FnCodegen<'a> {
         self.block_counter
     }
 
-      fn emit(&mut self, line: impl Into<String>) {
-            if !self.terminated {
-                  self.lines.push(line.into());
-            }
-      }
+    fn emit(&mut self, line: impl Into<String>) {
+        if !self.terminated {
+            self.lines.push(line.into());
+        }
+    }
 
-      fn start_block(&mut self, label: &str) {
+    fn start_block(&mut self, label: &str) {
         self.lines.push(format!("{label}:"));
         self.terminated = false;
-      }
+    }
 
-      fn generate_function(&mut self, f: &HFunctionDecl, sig: &FnSig) -> Result<String, CodegenError> {        if f.name == "kairo_main" && f.return_type.is_some() {
+    fn generate_function(&mut self, f: &HFunctionDecl, sig: &FnSig) -> Result<String, CodegenError> {
+        if f.name == "kairo_main" && f.return_type.is_some() {
             return Err(CodegenError::UnsupportedFeature(
                 "native codegen requires fn main() to have no return type".to_string(),
             ));
         }
 
-        let ret_ty = sig.ret;
+        let ret_ty = sig.ret.clone();
 
         let mut param_decls = Vec::new();
         for (p, ty) in f.params.iter().zip(&sig.params) {
@@ -311,7 +336,7 @@ impl<'a> FnCodegen<'a> {
             self.lines.push(format!("  {slot} = alloca {}", ty.llvm()));
             self.lines
                 .push(format!("  store {} %arg_{}, {}* {slot}", ty.llvm(), p.name, ty.llvm()));
-            self.locals.insert(p.name.clone(), (slot, *ty));
+            self.locals.insert(p.name.clone(), (slot, ty.clone()));
         }
 
         self.gen_stmts(&f.body)?;
@@ -322,6 +347,7 @@ impl<'a> FnCodegen<'a> {
                 LType::I32 => self.lines.push("  ret i32 0".to_string()),
                 LType::I1 => self.lines.push("  ret i1 0".to_string()),
                 LType::Str => self.lines.push("  ret i8* null".to_string()),
+                LType::Struct(name) => self.lines.push(format!("  ret %{name}* null")),
             }
         }
         self.lines.push("}".to_string());
@@ -464,18 +490,98 @@ impl<'a> FnCodegen<'a> {
             }
             HExpr::Binary { left, op, right } => self.gen_binary(left, *op, right),
             HExpr::Call { callee, args } => self.gen_call(callee, args),
-            HExpr::StructLiteral { .. }
-            | HExpr::FieldAccess { .. }
-            | HExpr::EnumLiteral { .. }
+            HExpr::StructLiteral { name, fields } => self.gen_struct_literal(name, fields),
+            HExpr::FieldAccess { object, field } => self.gen_field_access(object, field),
+            HExpr::EnumLiteral { .. }
             | HExpr::ArrayLiteral(_)
             | HExpr::Index { .. }
             | HExpr::Try(_)
             | HExpr::IsVariant { .. }
             | HExpr::VariantField { .. } => Err(CodegenError::UnsupportedFeature(
-                "structs, enums, arrays, match, and ? are not yet supported in native codegen"
-                    .to_string(),
+                "enums, arrays, match, and ? are not yet supported in native codegen".to_string(),
             )),
         }
+    }
+
+    fn gen_struct_literal(
+        &mut self,
+        name: &str,
+        fields: &[(String, HExpr)],
+    ) -> Result<(String, LType), CodegenError> {
+        let field_table = self.struct_types.get(name).cloned().ok_or_else(|| {
+            CodegenError::UnsupportedFeature(format!("undefined struct `{}` in native codegen", name))
+        })?;
+
+        let size_ptr = self.fresh_temp();
+        self.emit(format!("  {size_ptr} = getelementptr %{name}, %{name}* null, i32 1"));
+        let size = self.fresh_temp();
+        self.emit(format!("  {size} = ptrtoint %{name}* {size_ptr} to i64"));
+        let raw = self.fresh_temp();
+        self.emit(format!("  {raw} = call i8* @malloc(i64 {size})"));
+        let obj = self.fresh_temp();
+        self.emit(format!("  {obj} = bitcast i8* {raw} to %{name}*"));
+
+        for (field_name, field_expr) in fields {
+            let (val, _) = self.gen_expr(field_expr)?;
+            let idx = field_table
+                .iter()
+                .position(|(n, _)| n == field_name)
+                .ok_or_else(|| {
+                    CodegenError::UnsupportedFeature(format!(
+                        "struct `{}` has no field `{}`",
+                        name, field_name
+                    ))
+                })?;
+            let field_ty = &field_table[idx].1;
+            let field_ptr = self.fresh_temp();
+            self.emit(format!(
+                "  {field_ptr} = getelementptr %{name}, %{name}* {obj}, i32 0, i32 {idx}"
+            ));
+            self.emit(format!(
+                "  store {} {val}, {}* {field_ptr}",
+                field_ty.llvm(),
+                field_ty.llvm()
+            ));
+        }
+
+        Ok((obj, LType::Struct(name.to_string())))
+    }
+
+    fn gen_field_access(
+        &mut self,
+        object: &HExpr,
+        field: &str,
+    ) -> Result<(String, LType), CodegenError> {
+        let (obj_val, obj_ty) = self.gen_expr(object)?;
+        let LType::Struct(struct_name) = obj_ty else {
+            return Err(CodegenError::UnsupportedFeature(
+                "field access on a non-struct value is not supported in native codegen".to_string(),
+            ));
+        };
+        let field_table = self.struct_types.get(&struct_name).cloned().ok_or_else(|| {
+            CodegenError::UnsupportedFeature(format!(
+                "undefined struct `{}` in native codegen",
+                struct_name
+            ))
+        })?;
+        let idx = field_table
+            .iter()
+            .position(|(n, _)| n == field)
+            .ok_or_else(|| {
+                CodegenError::UnsupportedFeature(format!(
+                    "struct `{}` has no field `{}`",
+                    struct_name, field
+                ))
+            })?;
+        let field_ty = field_table[idx].1.clone();
+
+        let field_ptr = self.fresh_temp();
+        self.emit(format!(
+            "  {field_ptr} = getelementptr %{struct_name}, %{struct_name}* {obj_val}, i32 0, i32 {idx}"
+        ));
+        let t = self.fresh_temp();
+        self.emit(format!("  {t} = load {}, {}* {field_ptr}", field_ty.llvm(), field_ty.llvm()));
+        Ok((t, field_ty))
     }
 
     fn gen_binary(
@@ -489,6 +595,14 @@ impl<'a> FnCodegen<'a> {
 
         use BinaryOp::*;
         match op {
+            Eq if matches!(lty, LType::Struct(_)) | matches!(lty, LType::Struct(_)) => {
+                Err(CodegenError::UnsupportedFeature(
+                    "struct equality is not yet supported in native codegen".to_string(),
+                ))
+            }
+            NotEq if matches!(lty, LType::Struct(_)) => Err(CodegenError::UnsupportedFeature(
+                "struct equality is not yet supported in native codegen".to_string(),
+            )),
             Add if lty == LType::Str => {
                 let len_a = self.fresh_temp();
                 self.emit(format!("  {len_a} = call i64 @strlen(i8* {l})"));
@@ -602,6 +716,11 @@ impl<'a> FnCodegen<'a> {
                         "  {t} = call i32 (i8*, ...) @printf(i8* {fmt_ptr}, i8* {val})"
                     ));
                 }
+                LType::Struct(_) => {
+                    return Err(CodegenError::UnsupportedFeature(
+                        "print of struct values is not yet supported in native codegen".to_string(),
+                    ));
+                }
                 LType::Void => unreachable!("print argument cannot be void"),
             }
             return Ok(("0".to_string(), LType::Void));
@@ -611,7 +730,7 @@ impl<'a> FnCodegen<'a> {
             .fn_sigs
             .get(callee)
             .ok_or_else(|| CodegenError::UndefinedFunction(callee.to_string()))?;
-        let ret_ty = sig.ret;
+        let ret_ty = sig.ret.clone();
 
         let mut arg_strs = Vec::new();
         for a in args {
@@ -704,12 +823,6 @@ mod tests {
     }
 
     #[test]
-    fn rejects_struct_declarations() {
-        let err = gen_source("struct Point { x: Int }\nfn main() {}").unwrap_err();
-        assert!(matches!(err, CodegenError::UnsupportedFeature(_)));
-    }
-
-    #[test]
     fn rejects_missing_main() {
         let err = gen_source("fn notMain() {}").unwrap_err();
         assert_eq!(err, CodegenError::NoMainFunction);
@@ -725,14 +838,16 @@ mod tests {
 
     #[test]
     fn dedupes_repeated_string_literals() {
-        let ir = gen_source(r#"fn main() { print("hi")\nprint("hi") }"#.replace("\\n", "\n").as_str()).unwrap();
+        let source = "fn main() { print(\"hi\")\nprint(\"hi\") }";
+        let ir = gen_source(source).unwrap();
         assert!(ir.contains("@.str1"));
         assert!(!ir.contains("@.str2"));
     }
 
     #[test]
     fn generates_string_concatenation() {
-        let ir = gen_source(r#"fn main() { x := "a" + "b"\nprint(x) }"#.replace("\\n", "\n").as_str()).unwrap();
+        let source = "fn main() { x := \"a\" + \"b\"\nprint(x) }";
+        let ir = gen_source(source).unwrap();
         assert!(ir.contains("call i64 @strlen"));
         assert!(ir.contains("call i8* @malloc"));
         assert!(ir.contains("call i8* @strcpy"));
@@ -744,5 +859,41 @@ mod tests {
         let ir = gen_source(r#"fn main() { print("a" == "b") }"#).unwrap();
         assert!(ir.contains("call i32 @strcmp"));
         assert!(ir.contains("icmp eq i32"));
+    }
+
+    #[test]
+    fn rejects_enum_declarations() {
+        let err = gen_source("enum Status { Pending }\nfn main() {}").unwrap_err();
+        assert!(matches!(err, CodegenError::UnsupportedFeature(_)));
+    }
+
+    #[test]
+    fn generates_struct_construction_and_field_access() {
+        let source = r#"
+            struct Point { x: Int, y: Int }
+            fn main() {
+                p := Point { x: 3, y: 4 }
+                print(p.x)
+            }
+        "#;
+        let ir = gen_source(source).unwrap();
+        assert!(ir.contains("%Point = type { i32, i32 }"));
+        assert!(ir.contains("call i8* @malloc"));
+        assert!(ir.contains("getelementptr %Point, %Point* null, i32 1"));
+        assert!(ir.contains("getelementptr %Point, %Point*"));
+    }
+
+    #[test]
+    fn rejects_struct_equality() {
+        let source = r#"
+            struct Point { x: Int }
+            fn main() {
+                a := Point { x: 1 }
+                b := Point { x: 1 }
+                print(a == b)
+            }
+        "#;
+        let err = gen_source(source).unwrap_err();
+        assert!(matches!(err, CodegenError::UnsupportedFeature(_)));
     }
 }
