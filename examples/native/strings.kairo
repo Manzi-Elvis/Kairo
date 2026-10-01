@@ -1,0 +1,10 @@
+fn greet(name: String) -> String {
+    return "Hello, " + name
+}
+
+fn main() {
+    msg := greet("World")
+    print(msg)
+    print(msg == "Hello, World")
+    print(msg == "Goodbye")
+}
