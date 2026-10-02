@@ -1,9 +1,9 @@
-//! Emits textual LLVM IR for a restricted subset of Kairo: Int/Bool
-//! String, struct values, arithmetic, comparisons, user functions
-//! (with recursion), if/while, and print. Enums, arrays, match, and
-//! ? are rejected with CodegenError::UnsupportedFeature — deferred
-//! to later codegen slices, matching how the interpreter itself grew
-//! feature by feature.
+//! Emits textual LLVM IR for a restricted subset of Kairo: Int/Bool/
+//! String, struct and enum values (incl. match, which HIR already
+//! desugars to IsVariant/VariantField/if-else — no separate match
+//! codegen needed), arithmetic, comparisons, user functions (with
+//! recursion), if/while, and print. Arrays and ? are rejected with
+//! CodegenError::UnsupportedFeature — deferred to later slices.
 //!
 //! Known limitations of this pass:
 //! - Native Int is 32-bit (i32), unlike the interpreter's 64-bit Int.
@@ -11,13 +11,19 @@
 //! - A function whose body doesn't explicitly return on every path
 //!   gets a trailing default return rather than the interpreter's
 //!   Unit-mismatch behavior.
-//! - All heap allocations (Strings, structs) are leaked via malloc —
-//!   no free, refcounting, or GC yet.
-//! - Struct equality (`==`/`!=`) is not yet implemented: comparing
-//!   two struct pointers natively would compare addresses, not
-//!   field values, which would silently diverge from the
-//!   interpreter's structural equality — so it's rejected outright
-//!   rather than emitting incorrect IR.
+//! - All heap allocations (Strings, structs, enums) are leaked via
+//!   malloc — no free, refcounting, or GC yet.
+//! - Struct and enum equality (`==`/`!=`) are not yet implemented:
+//!   comparing two heap pointers natively would compare addresses,
+//!   not values, which would silently diverge from the
+//!   interpreter's structural equality — so both are rejected
+//!   outright rather than emitting incorrect IR.
+//! - Every enum shares one physical LLVM type (`%__kairo_enum = type
+//!   { i32, i8* }`: a tag plus an opaque payload pointer), with a
+//!   separate payload struct type per variant that has fields. This
+//!   is simpler than per-enum union types and works because the
+//!   type checker already guarantees every access is on the correct
+//!   enum/variant.
 
 use kairo_ast::{BinaryOp, Param};
 use kairo_hir::{HExpr, HFunctionDecl, HProgram, HStmt};
@@ -38,6 +44,7 @@ enum LType {
     I1,
     Str,
     Struct(String),
+    Enum(String),
     Void,
 }
 
@@ -48,16 +55,22 @@ impl LType {
             LType::I1 => "i1".to_string(),
             LType::Str => "i8*".to_string(),
             LType::Struct(name) => format!("%{name}*"),
+            LType::Enum(_) => "%__kairo_enum*".to_string(),
             LType::Void => "void".to_string(),
         }
     }
 
-    fn from_name(name: &str, struct_names: &HashSet<String>) -> Result<Self, CodegenError> {
+    fn from_name(
+        name: &str,
+        struct_names: &HashSet<String>,
+        enum_names: &HashSet<String>,
+    ) -> Result<Self, CodegenError> {
         match name {
             "Int" => Ok(LType::I32),
             "Bool" => Ok(LType::I1),
             "String" => Ok(LType::Str),
             other if struct_names.contains(other) => Ok(LType::Struct(other.to_string())),
+            other if enum_names.contains(other) => Ok(LType::Enum(other.to_string())),
             other => Err(CodegenError::UnsupportedType(other.to_string())),
         }
     }
@@ -69,27 +82,38 @@ struct FnSig {
 }
 
 type StructTable = HashMap<String, Vec<(String, LType)>>;
+/// enum name -> variant list in declaration order (index == tag),
+/// each with its field list in declaration order.
+type EnumTable = HashMap<String, Vec<(String, Vec<(String, LType)>)>>;
 
 pub fn generate(program: &HProgram) -> Result<String, CodegenError> {
-    if !program.enums.is_empty() {
-        return Err(CodegenError::UnsupportedFeature(
-            "native codegen does not yet support enum declarations".to_string(),
-        ));
-    }
-
     if !program.functions.iter().any(|f| f.name == "main") {
         return Err(CodegenError::NoMainFunction);
     }
 
     let struct_names: HashSet<String> = program.structs.iter().map(|s| s.name.clone()).collect();
+    let enum_names: HashSet<String> = program.enums.iter().map(|e| e.name.clone()).collect();
 
     let mut struct_types: StructTable = HashMap::new();
     for s in &program.structs {
         let mut fields = Vec::new();
         for f in &s.fields {
-            fields.push((f.name.clone(), LType::from_name(&f.type_name, &struct_names)?));
+            fields.push((f.name.clone(), LType::from_name(&f.type_name, &struct_names, &enum_names)?));
         }
         struct_types.insert(s.name.clone(), fields);
+    }
+
+    let mut enum_types: EnumTable = HashMap::new();
+    for e in &program.enums {
+        let mut variants = Vec::new();
+        for v in &e.variants {
+            let mut fields = Vec::new();
+            for f in &v.fields {
+                fields.push((f.name.clone(), LType::from_name(&f.type_name, &struct_names, &enum_names)?));
+            }
+            variants.push((v.name.clone(), fields));
+        }
+        enum_types.insert(e.name.clone(), variants);
     }
 
     let mut fn_sigs: HashMap<String, FnSig> = HashMap::new();
@@ -97,10 +121,10 @@ pub fn generate(program: &HProgram) -> Result<String, CodegenError> {
         let params = f
             .params
             .iter()
-            .map(|p: &Param| LType::from_name(&p.type_name, &struct_names))
+            .map(|p: &Param| LType::from_name(&p.type_name, &struct_names, &enum_names))
             .collect::<Result<Vec<_>, _>>()?;
         let ret = match &f.return_type {
-            Some(t) => LType::from_name(t, &struct_names)?,
+            Some(t) => LType::from_name(t, &struct_names, &enum_names)?,
             None => LType::Void,
         };
         fn_sigs.insert(f.name.clone(), FnSig { params, ret });
@@ -118,6 +142,24 @@ pub fn generate(program: &HProgram) -> Result<String, CodegenError> {
         let field_types: Vec<String> =
             struct_types[&s.name].iter().map(|(_, t)| t.llvm()).collect();
         out.push(format!("%{} = type {{ {} }}", s.name, field_types.join(", ")));
+    }
+
+    if !program.enums.is_empty() {
+        out.push("%__kairo_enum = type { i32, i8* }".to_string());
+        for e in &program.enums {
+            for (variant_name, fields) in &enum_types[&e.name] {
+                if fields.is_empty() {
+                    continue;
+                }
+                let field_types: Vec<String> = fields.iter().map(|(_, t)| t.llvm()).collect();
+                out.push(format!(
+                    "%{}_{} = type {{ {} }}",
+                    e.name,
+                    variant_name,
+                    field_types.join(", ")
+                ));
+            }
+        }
     }
 
     out.push(r#"@.int_fmt = private unnamed_addr constant [4 x i8] c"%d\0A\00""#.to_string());
@@ -139,7 +181,7 @@ pub fn generate(program: &HProgram) -> Result<String, CodegenError> {
             continue;
         }
         let sig = fn_sigs.get(&f.name).expect("signature precomputed");
-        let mut gen = FnCodegen::new(&fn_sigs, &string_globals, &struct_types);
+        let mut gen = FnCodegen::new(&fn_sigs, &string_globals, &struct_types, &enum_types);
         out.push(gen.generate_function(f, sig)?);
         out.push(String::new());
     }
@@ -148,7 +190,7 @@ pub fn generate(program: &HProgram) -> Result<String, CodegenError> {
     let main_sig = fn_sigs.get("main").expect("signature precomputed");
     let mut renamed = kairo_main.clone();
     renamed.name = "kairo_main".to_string();
-    let mut gen = FnCodegen::new(&fn_sigs, &string_globals, &struct_types);
+    let mut gen = FnCodegen::new(&fn_sigs, &string_globals, &struct_types, &enum_types);
     out.push(gen.generate_function(&renamed, main_sig)?);
     out.push(String::new());
 
@@ -262,6 +304,7 @@ struct FnCodegen<'a> {
     fn_sigs: &'a HashMap<String, FnSig>,
     strings: &'a HashMap<String, (String, usize)>,
     struct_types: &'a StructTable,
+    enum_types: &'a EnumTable,
     locals: HashMap<String, (String, LType)>,
     lines: Vec<String>,
     temp_counter: usize,
@@ -274,11 +317,13 @@ impl<'a> FnCodegen<'a> {
         fn_sigs: &'a HashMap<String, FnSig>,
         strings: &'a HashMap<String, (String, usize)>,
         struct_types: &'a StructTable,
+        enum_types: &'a EnumTable,
     ) -> Self {
         Self {
             fn_sigs,
             strings,
             struct_types,
+            enum_types,
             locals: HashMap::new(),
             lines: Vec::new(),
             temp_counter: 0,
@@ -342,12 +387,13 @@ impl<'a> FnCodegen<'a> {
         self.gen_stmts(&f.body)?;
 
         if !self.terminated {
-            match ret_ty {
+            match &ret_ty {
                 LType::Void => self.lines.push("  ret void".to_string()),
                 LType::I32 => self.lines.push("  ret i32 0".to_string()),
                 LType::I1 => self.lines.push("  ret i1 0".to_string()),
                 LType::Str => self.lines.push("  ret i8* null".to_string()),
                 LType::Struct(name) => self.lines.push(format!("  ret %{name}* null")),
+                LType::Enum(_) => self.lines.push("  ret %__kairo_enum* null".to_string()),
             }
         }
         self.lines.push("}".to_string());
@@ -492,14 +538,20 @@ impl<'a> FnCodegen<'a> {
             HExpr::Call { callee, args } => self.gen_call(callee, args),
             HExpr::StructLiteral { name, fields } => self.gen_struct_literal(name, fields),
             HExpr::FieldAccess { object, field } => self.gen_field_access(object, field),
-            HExpr::EnumLiteral { .. }
-            | HExpr::ArrayLiteral(_)
-            | HExpr::Index { .. }
-            | HExpr::Try(_)
-            | HExpr::IsVariant { .. }
-            | HExpr::VariantField { .. } => Err(CodegenError::UnsupportedFeature(
-                "enums, arrays, match, and ? are not yet supported in native codegen".to_string(),
-            )),
+            HExpr::EnumLiteral { enum_name, variant, fields } => {
+                self.gen_enum_literal(enum_name, variant, fields)
+            }
+            HExpr::IsVariant { scrutinee, enum_name, variant } => {
+                self.gen_is_variant(scrutinee, enum_name, variant)
+            }
+            HExpr::VariantField { scrutinee, enum_name, variant, field } => {
+                self.gen_variant_field(scrutinee, enum_name, variant, field)
+            }
+            HExpr::ArrayLiteral(_) | HExpr::Index { .. } | HExpr::Try(_) => {
+                Err(CodegenError::UnsupportedFeature(
+                    "arrays and ? are not yet supported in native codegen".to_string(),
+                ))
+            }
         }
     }
 
@@ -584,6 +636,157 @@ impl<'a> FnCodegen<'a> {
         Ok((t, field_ty))
     }
 
+    /// Looks up a variant's tag index and field list within its enum.
+    fn find_variant(
+        &self,
+        enum_name: &str,
+        variant: &str,
+    ) -> Result<(usize, Vec<(String, LType)>), CodegenError> {
+        let variants = self.enum_types.get(enum_name).ok_or_else(|| {
+            CodegenError::UnsupportedFeature(format!("undefined enum `{}` in native codegen", enum_name))
+        })?;
+        variants
+            .iter()
+            .position(|(n, _)| n == variant)
+            .map(|idx| (idx, variants[idx].1.clone()))
+            .ok_or_else(|| {
+                CodegenError::UnsupportedFeature(format!(
+                    "enum `{}` has no variant `{}`",
+                    enum_name, variant
+                ))
+            })
+    }
+
+    fn gen_enum_literal(
+        &mut self,
+        enum_name: &str,
+        variant: &str,
+        fields: &[(String, HExpr)],
+    ) -> Result<(String, LType), CodegenError> {
+        let (tag, field_table) = self.find_variant(enum_name, variant)?;
+
+        // Allocate the shared { i32, i8* } union struct.
+        let union_size_ptr = self.fresh_temp();
+        self.emit(format!(
+            "  {union_size_ptr} = getelementptr %__kairo_enum, %__kairo_enum* null, i32 1"
+        ));
+        let union_size = self.fresh_temp();
+        self.emit(format!("  {union_size} = ptrtoint %__kairo_enum* {union_size_ptr} to i64"));
+        let union_raw = self.fresh_temp();
+        self.emit(format!("  {union_raw} = call i8* @malloc(i64 {union_size})"));
+        let union_obj = self.fresh_temp();
+        self.emit(format!("  {union_obj} = bitcast i8* {union_raw} to %__kairo_enum*"));
+
+        let tag_ptr = self.fresh_temp();
+        self.emit(format!(
+            "  {tag_ptr} = getelementptr %__kairo_enum, %__kairo_enum* {union_obj}, i32 0, i32 0"
+        ));
+        self.emit(format!("  store i32 {tag}, i32* {tag_ptr}"));
+
+        let payload_ptr_field = self.fresh_temp();
+        self.emit(format!(
+            "  {payload_ptr_field} = getelementptr %__kairo_enum, %__kairo_enum* {union_obj}, i32 0, i32 1"
+        ));
+
+        if field_table.is_empty() {
+            self.emit(format!("  store i8* null, i8** {payload_ptr_field}"));
+        } else {
+            let payload_type = format!("%{enum_name}_{variant}");
+            let psize_ptr = self.fresh_temp();
+            self.emit(format!(
+                "  {psize_ptr} = getelementptr {payload_type}, {payload_type}* null, i32 1"
+            ));
+            let psize = self.fresh_temp();
+            self.emit(format!("  {psize} = ptrtoint {payload_type}* {psize_ptr} to i64"));
+            let praw = self.fresh_temp();
+            self.emit(format!("  {praw} = call i8* @malloc(i64 {psize})"));
+            let payload_obj = self.fresh_temp();
+            self.emit(format!("  {payload_obj} = bitcast i8* {praw} to {payload_type}*"));
+
+            for (field_name, field_expr) in fields {
+                let (val, _) = self.gen_expr(field_expr)?;
+                let idx = field_table
+                    .iter()
+                    .position(|(n, _)| n == field_name)
+                    .ok_or_else(|| {
+                        CodegenError::UnsupportedFeature(format!(
+                            "variant `{}::{}` has no field `{}`",
+                            enum_name, variant, field_name
+                        ))
+                    })?;
+                let field_ty = &field_table[idx].1;
+                let fptr = self.fresh_temp();
+                self.emit(format!(
+                    "  {fptr} = getelementptr {payload_type}, {payload_type}* {payload_obj}, i32 0, i32 {idx}"
+                ));
+                self.emit(format!("  store {} {val}, {}* {fptr}", field_ty.llvm(), field_ty.llvm()));
+            }
+
+            self.emit(format!("  store i8* {praw}, i8** {payload_ptr_field}"));
+        }
+
+        Ok((union_obj, LType::Enum(enum_name.to_string())))
+    }
+
+    fn gen_is_variant(
+        &mut self,
+        scrutinee: &HExpr,
+        enum_name: &str,
+        variant: &str,
+    ) -> Result<(String, LType), CodegenError> {
+        let (tag, _) = self.find_variant(enum_name, variant)?;
+        let (obj, _) = self.gen_expr(scrutinee)?;
+
+        let tag_ptr = self.fresh_temp();
+        self.emit(format!(
+            "  {tag_ptr} = getelementptr %__kairo_enum, %__kairo_enum* {obj}, i32 0, i32 0"
+        ));
+        let loaded_tag = self.fresh_temp();
+        self.emit(format!("  {loaded_tag} = load i32, i32* {tag_ptr}"));
+        let t = self.fresh_temp();
+        self.emit(format!("  {t} = icmp eq i32 {loaded_tag}, {tag}"));
+        Ok((t, LType::I1))
+    }
+
+    fn gen_variant_field(
+        &mut self,
+        scrutinee: &HExpr,
+        enum_name: &str,
+        variant: &str,
+        field: &str,
+    ) -> Result<(String, LType), CodegenError> {
+        let (_, field_table) = self.find_variant(enum_name, variant)?;
+        let idx = field_table
+            .iter()
+            .position(|(n, _)| n == field)
+            .ok_or_else(|| {
+                CodegenError::UnsupportedFeature(format!(
+                    "variant `{}::{}` has no field `{}`",
+                    enum_name, variant, field
+                ))
+            })?;
+        let field_ty = field_table[idx].1.clone();
+        let payload_type = format!("%{enum_name}_{variant}");
+
+        let (obj, _) = self.gen_expr(scrutinee)?;
+        let payload_ptr_field = self.fresh_temp();
+        self.emit(format!(
+            "  {payload_ptr_field} = getelementptr %__kairo_enum, %__kairo_enum* {obj}, i32 0, i32 1"
+        ));
+        let payload_raw = self.fresh_temp();
+        self.emit(format!("  {payload_raw} = load i8*, i8** {payload_ptr_field}"));
+        let payload_obj = self.fresh_temp();
+        self.emit(format!("  {payload_obj} = bitcast i8* {payload_raw} to {payload_type}*"));
+
+        let fptr = self.fresh_temp();
+        self.emit(format!(
+            "  {fptr} = getelementptr {payload_type}, {payload_type}* {payload_obj}, i32 0, i32 {idx}"
+        ));
+        let t = self.fresh_temp();
+        self.emit(format!("  {t} = load {}, {}* {fptr}", field_ty.llvm(), field_ty.llvm()));
+        Ok((t, field_ty))
+    }
+
     fn gen_binary(
         &mut self,
         left: &HExpr,
@@ -595,14 +798,11 @@ impl<'a> FnCodegen<'a> {
 
         use BinaryOp::*;
         match op {
-            Eq if matches!(lty, LType::Struct(_)) | matches!(lty, LType::Struct(_)) => {
+            Eq | NotEq if matches!(lty, LType::Struct(_) | LType::Enum(_)) => {
                 Err(CodegenError::UnsupportedFeature(
-                    "struct equality is not yet supported in native codegen".to_string(),
+                    "struct/enum equality is not yet supported in native codegen".to_string(),
                 ))
             }
-            NotEq if matches!(lty, LType::Struct(_)) => Err(CodegenError::UnsupportedFeature(
-                "struct equality is not yet supported in native codegen".to_string(),
-            )),
             Add if lty == LType::Str => {
                 let len_a = self.fresh_temp();
                 self.emit(format!("  {len_a} = call i64 @strlen(i8* {l})"));
@@ -716,9 +916,10 @@ impl<'a> FnCodegen<'a> {
                         "  {t} = call i32 (i8*, ...) @printf(i8* {fmt_ptr}, i8* {val})"
                     ));
                 }
-                LType::Struct(_) => {
+                LType::Struct(_) | LType::Enum(_) => {
                     return Err(CodegenError::UnsupportedFeature(
-                        "print of struct values is not yet supported in native codegen".to_string(),
+                        "print of struct/enum values is not yet supported in native codegen"
+                            .to_string(),
                     ));
                 }
                 LType::Void => unreachable!("print argument cannot be void"),
@@ -862,12 +1063,6 @@ mod tests {
     }
 
     #[test]
-    fn rejects_enum_declarations() {
-        let err = gen_source("enum Status { Pending }\nfn main() {}").unwrap_err();
-        assert!(matches!(err, CodegenError::UnsupportedFeature(_)));
-    }
-
-    #[test]
     fn generates_struct_construction_and_field_access() {
         let source = r#"
             struct Point { x: Int, y: Int }
@@ -890,6 +1085,53 @@ mod tests {
             fn main() {
                 a := Point { x: 1 }
                 b := Point { x: 1 }
+                print(a == b)
+            }
+        "#;
+        let err = gen_source(source).unwrap_err();
+        assert!(matches!(err, CodegenError::UnsupportedFeature(_)));
+    }
+
+    #[test]
+    fn generates_enum_construction_and_match() {
+        let source = r#"
+            enum Status { Pending, Failed(reason: String) }
+            fn main() {
+                s := Status::Failed(reason: "timeout")
+                match s {
+                    Status::Pending => { print("pending") }
+                    Status::Failed(reason) => { print(reason) }
+                }
+            }
+        "#;
+        let ir = gen_source(source).unwrap();
+        assert!(ir.contains("%__kairo_enum = type { i32, i8* }"));
+        assert!(ir.contains("%Status_Failed = type { i8* }"));
+        assert!(ir.contains("getelementptr %__kairo_enum, %__kairo_enum*"));
+        assert!(ir.contains("icmp eq i32"));
+        assert!(ir.contains("bitcast i8* {{payload}}".replace("{{payload}}", "").as_str()) || ir.contains("bitcast i8*"));
+    }
+
+    #[test]
+    fn generates_unit_variant_with_null_payload() {
+        let source = r#"
+            enum Status { Pending, Done }
+            fn main() {
+                s := Status::Pending
+                print(1)
+            }
+        "#;
+        let ir = gen_source(source).unwrap();
+        assert!(ir.contains("store i8* null, i8**"));
+    }
+
+    #[test]
+    fn rejects_enum_equality() {
+        let source = r#"
+            enum Status { Pending }
+            fn main() {
+                a := Status::Pending
+                b := Status::Pending
                 print(a == b)
             }
         "#;
