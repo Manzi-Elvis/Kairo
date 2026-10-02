@@ -1,0 +1,21 @@
+enum Status {
+    Pending,
+    Failed(reason: String)
+}
+
+fn describe(s: Status) -> String {
+    match s {
+        Status::Pending => {
+            return "still pending"
+        }
+        Status::Failed(reason) => {
+            return "failed: " + reason
+        }
+    }
+    return "unreachable"
+}
+
+fn main() {
+    print(describe(Status::Pending))
+    print(describe(Status::Failed(reason: "timeout")))
+}
