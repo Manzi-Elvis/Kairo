@@ -399,3 +399,24 @@ functions, and `print(String)`.
 
 ## Still not supported natively
 Structs, enums, arrays, match, `?`, modules — unchanged from v0.15.
+
+---
+
+# Kairo v0.17: native struct support
+
+`kairo build` now supports structs: declaration becomes a native
+LLVM struct type (`%Name = type { ... }`), construction allocates
+via `malloc`, and field access/passing-by-pointer work through
+functions.
+
+## Implementation notes
+- Structs are heap-allocated (leaked, same as String) and passed by
+  pointer (`%Name*`) everywhere — fields, params, return values.
+- Struct **equality** (`==`/`!=`) is explicitly rejected rather than
+  silently comparing pointers (which would diverge from the
+  interpreter's structural equality). Structural equality codegen is
+  future work.
+- `print(struct)` is not yet supported.
+
+## Still not supported natively
+Enums, arrays, match, `?`, modules — unchanged.
