@@ -420,3 +420,36 @@ functions.
 
 ## Still not supported natively
 Enums, arrays, match, `?`, modules — unchanged.
+
+
+---
+
+# Kairo v0.18: native enum support (and match, for free)
+
+`kairo build` now supports enums and `match`. Since HIR already
+desugars `match` into `if`/`else` chains using `IsVariant`/
+`VariantField` (back in v0.14), adding enum codegen made `match`
+work natively with no separate match-codegen logic.
+
+## Implementation notes
+- Every enum shares one physical LLVM type:
+  `%__kairo_enum = type { i32, i8* }` — a tag plus an opaque payload
+  pointer. Each data-carrying variant gets its own payload struct
+  type (`%EnumName_VariantName`), heap-allocated and pointed to by
+  the union's second field. Unit variants store a null payload
+  pointer.
+- This works because the type checker already guarantees every
+  `IsVariant`/`VariantField` access targets the correct enum/variant
+  — codegen doesn't need to re-verify that.
+- Enum **equality** is rejected, same reasoning as struct equality
+  (v0.17): comparing tagged-union pointers isn't structural
+  comparison.
+- `print(enum)` is not yet supported.
+
+## Still not supported natively
+Arrays, `?`, modules.
+
+## Verified
+`examples/native/status.kairo` — the same program from the v0.9
+interpreter match milestone — now compiles to a native executable
+and produces identical output to the interpreter.
