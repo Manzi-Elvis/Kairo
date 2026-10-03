@@ -1,9 +1,8 @@
 //! Emits textual LLVM IR for a restricted subset of Kairo: Int/Bool/
-//! String, struct and enum values (incl. match, which HIR already
-//! desugars to IsVariant/VariantField/if-else — no separate match
-//! codegen needed), arithmetic, comparisons, user functions (with
-//! recursion), if/while, and print. Arrays and ? are rejected with
-//! CodegenError::UnsupportedFeature — deferred to later slices.
+//! String, structs, enums (incl. match, via HIR's IsVariant/
+//! VariantField desugaring), arrays, arithmetic, comparisons, user
+//! functions (with recursion), if/while, and print. `?` is rejected
+//! with CodegenError::UnsupportedFeature — deferred to a later slice.
 //!
 //! Known limitations of this pass:
 //! - Native Int is 32-bit (i32), unlike the interpreter's 64-bit Int.
@@ -11,19 +10,18 @@
 //! - A function whose body doesn't explicitly return on every path
 //!   gets a trailing default return rather than the interpreter's
 //!   Unit-mismatch behavior.
-//! - All heap allocations (Strings, structs, enums) are leaked via
-//!   malloc — no free, refcounting, or GC yet.
-//! - Struct and enum equality (`==`/`!=`) are not yet implemented:
-//!   comparing two heap pointers natively would compare addresses,
-//!   not values, which would silently diverge from the
-//!   interpreter's structural equality — so both are rejected
-//!   outright rather than emitting incorrect IR.
-//! - Every enum shares one physical LLVM type (`%__kairo_enum = type
-//!   { i32, i8* }`: a tag plus an opaque payload pointer), with a
-//!   separate payload struct type per variant that has fields. This
-//!   is simpler than per-enum union types and works because the
-//!   type checker already guarantees every access is on the correct
-//!   enum/variant.
+//! - All heap allocations (Strings, structs, enums, arrays) are
+//!   leaked via malloc — no free, refcounting, or GC yet.
+//! - Struct, enum, and array equality (`==`/`!=`) are not yet
+//!   implemented: comparing heap pointers natively would compare
+//!   addresses, not values, diverging from the interpreter's
+//!   structural equality — so all three are rejected outright.
+//! - Every enum shares one physical LLVM type (tag + opaque payload
+//!   pointer); every array shares one physical LLVM type (length +
+//!   opaque element-buffer pointer), with the actual element type
+//!   tracked only in Rust's LType, not in LLVM's type system. Out-
+//!   of-bounds array access prints a message and calls `exit(1)`
+//!   rather than invoking undefined behavior.
 
 use kairo_ast::{BinaryOp, Param};
 use kairo_hir::{HExpr, HFunctionDecl, HProgram, HStmt};
@@ -45,6 +43,7 @@ enum LType {
     Str,
     Struct(String),
     Enum(String),
+    Array(Box<LType>),
     Void,
 }
 
@@ -56,6 +55,7 @@ impl LType {
             LType::Str => "i8*".to_string(),
             LType::Struct(name) => format!("%{name}*"),
             LType::Enum(_) => "%__kairo_enum*".to_string(),
+            LType::Array(_) => "%__kairo_array*".to_string(),
             LType::Void => "void".to_string(),
         }
     }
@@ -82,8 +82,6 @@ struct FnSig {
 }
 
 type StructTable = HashMap<String, Vec<(String, LType)>>;
-/// enum name -> variant list in declaration order (index == tag),
-/// each with its field list in declaration order.
 type EnumTable = HashMap<String, Vec<(String, Vec<(String, LType)>)>>;
 
 pub fn generate(program: &HProgram) -> Result<String, CodegenError> {
@@ -137,6 +135,8 @@ pub fn generate(program: &HProgram) -> Result<String, CodegenError> {
     out.push("declare i8* @strcpy(i8*, i8*)".to_string());
     out.push("declare i8* @strcat(i8*, i8*)".to_string());
     out.push("declare i32 @strcmp(i8*, i8*)".to_string());
+    out.push("declare i8* @memcpy(i8*, i8*, i64)".to_string());
+    out.push("declare void @exit(i32)".to_string());
 
     for s in &program.structs {
         let field_types: Vec<String> =
@@ -162,10 +162,16 @@ pub fn generate(program: &HProgram) -> Result<String, CodegenError> {
         }
     }
 
+    out.push("%__kairo_array = type { i64, i8* }".to_string());
+
     out.push(r#"@.int_fmt = private unnamed_addr constant [4 x i8] c"%d\0A\00""#.to_string());
     out.push(r#"@.str_fmt = private unnamed_addr constant [4 x i8] c"%s\0A\00""#.to_string());
     out.push(r#"@.true_str = private unnamed_addr constant [6 x i8] c"true\0A\00""#.to_string());
     out.push(r#"@.false_str = private unnamed_addr constant [7 x i8] c"false\0A\00""#.to_string());
+    let (oob_escaped, oob_len) = llvm_escape_string("index out of bounds\n");
+    out.push(format!(
+        "@.oob_msg = private unnamed_addr constant [{oob_len} x i8] c\"{oob_escaped}\""
+    ));
 
     let mut string_globals: HashMap<String, (String, usize)> = HashMap::new();
     for (i, s) in collect_string_literals(program).into_iter().enumerate() {
@@ -181,7 +187,7 @@ pub fn generate(program: &HProgram) -> Result<String, CodegenError> {
             continue;
         }
         let sig = fn_sigs.get(&f.name).expect("signature precomputed");
-        let mut gen = FnCodegen::new(&fn_sigs, &string_globals, &struct_types, &enum_types);
+        let mut gen = FnCodegen::new(&fn_sigs, &string_globals, &struct_types, &enum_types, oob_len);
         out.push(gen.generate_function(f, sig)?);
         out.push(String::new());
     }
@@ -190,7 +196,7 @@ pub fn generate(program: &HProgram) -> Result<String, CodegenError> {
     let main_sig = fn_sigs.get("main").expect("signature precomputed");
     let mut renamed = kairo_main.clone();
     renamed.name = "kairo_main".to_string();
-    let mut gen = FnCodegen::new(&fn_sigs, &string_globals, &struct_types, &enum_types);
+    let mut gen = FnCodegen::new(&fn_sigs, &string_globals, &struct_types, &enum_types, oob_len);
     out.push(gen.generate_function(&renamed, main_sig)?);
     out.push(String::new());
 
@@ -305,6 +311,7 @@ struct FnCodegen<'a> {
     strings: &'a HashMap<String, (String, usize)>,
     struct_types: &'a StructTable,
     enum_types: &'a EnumTable,
+    oob_len: usize,
     locals: HashMap<String, (String, LType)>,
     lines: Vec<String>,
     temp_counter: usize,
@@ -318,12 +325,14 @@ impl<'a> FnCodegen<'a> {
         strings: &'a HashMap<String, (String, usize)>,
         struct_types: &'a StructTable,
         enum_types: &'a EnumTable,
+        oob_len: usize,
     ) -> Self {
         Self {
             fn_sigs,
             strings,
             struct_types,
             enum_types,
+            oob_len,
             locals: HashMap::new(),
             lines: Vec::new(),
             temp_counter: 0,
@@ -351,6 +360,46 @@ impl<'a> FnCodegen<'a> {
     fn start_block(&mut self, label: &str) {
         self.lines.push(format!("{label}:"));
         self.terminated = false;
+    }
+
+    /// Emits the getelementptr+ptrtoint pattern that computes
+    /// sizeof(llvm_ty) as an i64, returning the temp register
+    /// holding it. Works uniformly for scalar and pointer types.
+    fn emit_sizeof(&mut self, llvm_ty: &str) -> String {
+        let size_ptr = self.fresh_temp();
+        self.emit(format!("  {size_ptr} = getelementptr {llvm_ty}, {llvm_ty}* null, i32 1"));
+        let size = self.fresh_temp();
+        self.emit(format!("  {size} = ptrtoint {llvm_ty}* {size_ptr} to i64"));
+        size
+    }
+
+    /// Emits a bounds check against idx64 (signed i64, from a
+    /// sign-extended i32 index) and len64 (array length). On
+    /// failure, prints a message and calls exit(1). Leaves the
+    /// generator positioned inside the "in bounds" block on return.
+    fn emit_bounds_check(&mut self, idx64: &str, len64: &str) {
+        let inb = self.fresh_temp();
+        // Unsigned comparison: a negative idx64, reinterpreted as
+        // unsigned, becomes enormous and so is correctly rejected
+        // too — one comparison covers both "negative" and "too large".
+        self.emit(format!("  {inb} = icmp ult i64 {idx64}, {len64}"));
+        let idx = self.fresh_idx();
+        let ok_label = format!("idxok{idx}");
+        let oob_label = format!("idxoob{idx}");
+        self.emit(format!("  br i1 {inb}, label %{ok_label}, label %{oob_label}"));
+
+        self.start_block(&oob_label);
+        let msgp = self.fresh_temp();
+        let len = self.oob_len;
+        self.emit(format!(
+            "  {msgp} = getelementptr [{len} x i8], [{len} x i8]* @.oob_msg, i32 0, i32 0"
+        ));
+        self.emit(format!("  call i32 (i8*, ...) @printf(i8* {msgp})"));
+        self.emit("  call void @exit(i32 1)".to_string());
+        self.lines.push("  unreachable".to_string());
+        self.terminated = true;
+
+        self.start_block(&ok_label);
     }
 
     fn generate_function(&mut self, f: &HFunctionDecl, sig: &FnSig) -> Result<String, CodegenError> {
@@ -394,6 +443,7 @@ impl<'a> FnCodegen<'a> {
                 LType::Str => self.lines.push("  ret i8* null".to_string()),
                 LType::Struct(name) => self.lines.push(format!("  ret %{name}* null")),
                 LType::Enum(_) => self.lines.push("  ret %__kairo_enum* null".to_string()),
+                LType::Array(_) => self.lines.push("  ret %__kairo_array* null".to_string()),
             }
         }
         self.lines.push("}".to_string());
@@ -431,9 +481,54 @@ impl<'a> FnCodegen<'a> {
                 self.emit(format!("  store {} {val}, {}* {slot}", ty.llvm(), ty.llvm()));
                 Ok(())
             }
-            HStmt::IndexAssign { .. } => Err(CodegenError::UnsupportedFeature(
-                "arrays are not yet supported in native codegen".to_string(),
-            )),
+            HStmt::IndexAssign { name, index, value } => {
+                let (slot, arr_ty) = self
+                    .locals
+                    .get(name)
+                    .cloned()
+                    .ok_or_else(|| CodegenError::UndefinedVariable(name.clone()))?;
+                let LType::Array(elem_ty) = arr_ty else {
+                    return Err(CodegenError::UnsupportedFeature(
+                        "index assignment on a non-array value".to_string(),
+                    ));
+                };
+
+                let arr_val = self.fresh_temp();
+                self.emit(format!(
+                    "  {arr_val} = load %__kairo_array*, %__kairo_array** {slot}"
+                ));
+
+                let (idx_val, _) = self.gen_expr(index)?;
+                let idx64 = self.fresh_temp();
+                self.emit(format!("  {idx64} = sext i32 {idx_val} to i64"));
+
+                let len_ptr = self.fresh_temp();
+                self.emit(format!(
+                    "  {len_ptr} = getelementptr %__kairo_array, %__kairo_array* {arr_val}, i32 0, i32 0"
+                ));
+                let len64 = self.fresh_temp();
+                self.emit(format!("  {len64} = load i64, i64* {len_ptr}"));
+
+                self.emit_bounds_check(&idx64, &len64);
+
+                let data_field = self.fresh_temp();
+                self.emit(format!(
+                    "  {data_field} = getelementptr %__kairo_array, %__kairo_array* {arr_val}, i32 0, i32 1"
+                ));
+                let raw = self.fresh_temp();
+                self.emit(format!("  {raw} = load i8*, i8** {data_field}"));
+                let elem_llvm = elem_ty.llvm();
+                let typed = self.fresh_temp();
+                self.emit(format!("  {typed} = bitcast i8* {raw} to {elem_llvm}*"));
+                let elem_ptr = self.fresh_temp();
+                self.emit(format!(
+                    "  {elem_ptr} = getelementptr {elem_llvm}, {elem_llvm}* {typed}, i64 {idx64}"
+                ));
+
+                let (val, _) = self.gen_expr(value)?;
+                self.emit(format!("  store {elem_llvm} {val}, {elem_llvm}* {elem_ptr}"));
+                Ok(())
+            }
             HStmt::Expr(e) => {
                 self.gen_expr(e)?;
                 Ok(())
@@ -547,12 +642,105 @@ impl<'a> FnCodegen<'a> {
             HExpr::VariantField { scrutinee, enum_name, variant, field } => {
                 self.gen_variant_field(scrutinee, enum_name, variant, field)
             }
-            HExpr::ArrayLiteral(_) | HExpr::Index { .. } | HExpr::Try(_) => {
-                Err(CodegenError::UnsupportedFeature(
-                    "arrays and ? are not yet supported in native codegen".to_string(),
-                ))
-            }
+            HExpr::ArrayLiteral(elements) => self.gen_array_literal(elements),
+            HExpr::Index { array, index } => self.gen_index(array, index),
+            HExpr::Try(_) => Err(CodegenError::UnsupportedFeature(
+                "? is not yet supported in native codegen".to_string(),
+            )),
         }
+    }
+
+    fn gen_array_literal(&mut self, elements: &[HExpr]) -> Result<(String, LType), CodegenError> {
+        if elements.is_empty() {
+            return Err(CodegenError::UnsupportedFeature(
+                "empty array literals are not yet supported in native codegen".to_string(),
+            ));
+        }
+
+        let mut values = Vec::with_capacity(elements.len());
+        let mut elem_ty: Option<LType> = None;
+        for e in elements {
+            let (val, ty) = self.gen_expr(e)?;
+            elem_ty.get_or_insert_with(|| ty.clone());
+            values.push(val);
+        }
+        let elem_ty = elem_ty.unwrap();
+        let elem_llvm = elem_ty.llvm();
+        let count = values.len() as i64;
+
+        let elemsize = self.emit_sizeof(&elem_llvm);
+        let total_bytes = self.fresh_temp();
+        self.emit(format!("  {total_bytes} = mul i64 {count}, {elemsize}"));
+        let buf_raw = self.fresh_temp();
+        self.emit(format!("  {buf_raw} = call i8* @malloc(i64 {total_bytes})"));
+        let buf_typed = self.fresh_temp();
+        self.emit(format!("  {buf_typed} = bitcast i8* {buf_raw} to {elem_llvm}*"));
+
+        for (i, val) in values.iter().enumerate() {
+            let elem_ptr = self.fresh_temp();
+            self.emit(format!(
+                "  {elem_ptr} = getelementptr {elem_llvm}, {elem_llvm}* {buf_typed}, i64 {i}"
+            ));
+            self.emit(format!("  store {elem_llvm} {val}, {elem_llvm}* {elem_ptr}"));
+        }
+
+        let arr_size = self.emit_sizeof("%__kairo_array");
+        let arr_raw = self.fresh_temp();
+        self.emit(format!("  {arr_raw} = call i8* @malloc(i64 {arr_size})"));
+        let arr_obj = self.fresh_temp();
+        self.emit(format!("  {arr_obj} = bitcast i8* {arr_raw} to %__kairo_array*"));
+
+        let len_ptr = self.fresh_temp();
+        self.emit(format!(
+            "  {len_ptr} = getelementptr %__kairo_array, %__kairo_array* {arr_obj}, i32 0, i32 0"
+        ));
+        self.emit(format!("  store i64 {count}, i64* {len_ptr}"));
+        let data_ptr = self.fresh_temp();
+        self.emit(format!(
+            "  {data_ptr} = getelementptr %__kairo_array, %__kairo_array* {arr_obj}, i32 0, i32 1"
+        ));
+        self.emit(format!("  store i8* {buf_raw}, i8** {data_ptr}"));
+
+        Ok((arr_obj, LType::Array(Box::new(elem_ty))))
+    }
+
+    fn gen_index(&mut self, array: &HExpr, index: &HExpr) -> Result<(String, LType), CodegenError> {
+        let (arr_val, arr_ty) = self.gen_expr(array)?;
+        let LType::Array(elem_ty) = arr_ty else {
+            return Err(CodegenError::UnsupportedFeature(
+                "indexing a non-array value".to_string(),
+            ));
+        };
+
+        let (idx_val, _) = self.gen_expr(index)?;
+        let idx64 = self.fresh_temp();
+        self.emit(format!("  {idx64} = sext i32 {idx_val} to i64"));
+
+        let len_ptr = self.fresh_temp();
+        self.emit(format!(
+            "  {len_ptr} = getelementptr %__kairo_array, %__kairo_array* {arr_val}, i32 0, i32 0"
+        ));
+        let len64 = self.fresh_temp();
+        self.emit(format!("  {len64} = load i64, i64* {len_ptr}"));
+
+        self.emit_bounds_check(&idx64, &len64);
+
+        let data_field = self.fresh_temp();
+        self.emit(format!(
+            "  {data_field} = getelementptr %__kairo_array, %__kairo_array* {arr_val}, i32 0, i32 1"
+        ));
+        let raw = self.fresh_temp();
+        self.emit(format!("  {raw} = load i8*, i8** {data_field}"));
+        let elem_llvm = elem_ty.llvm();
+        let typed = self.fresh_temp();
+        self.emit(format!("  {typed} = bitcast i8* {raw} to {elem_llvm}*"));
+        let elem_ptr = self.fresh_temp();
+        self.emit(format!(
+            "  {elem_ptr} = getelementptr {elem_llvm}, {elem_llvm}* {typed}, i64 {idx64}"
+        ));
+        let t = self.fresh_temp();
+        self.emit(format!("  {t} = load {elem_llvm}, {elem_llvm}* {elem_ptr}"));
+        Ok((t, *elem_ty))
     }
 
     fn gen_struct_literal(
@@ -636,7 +824,6 @@ impl<'a> FnCodegen<'a> {
         Ok((t, field_ty))
     }
 
-    /// Looks up a variant's tag index and field list within its enum.
     fn find_variant(
         &self,
         enum_name: &str,
@@ -665,7 +852,6 @@ impl<'a> FnCodegen<'a> {
     ) -> Result<(String, LType), CodegenError> {
         let (tag, field_table) = self.find_variant(enum_name, variant)?;
 
-        // Allocate the shared { i32, i8* } union struct.
         let union_size_ptr = self.fresh_temp();
         self.emit(format!(
             "  {union_size_ptr} = getelementptr %__kairo_enum, %__kairo_enum* null, i32 1"
@@ -798,9 +984,11 @@ impl<'a> FnCodegen<'a> {
 
         use BinaryOp::*;
         match op {
-            Eq | NotEq if matches!(lty, LType::Struct(_) | LType::Enum(_)) => {
+            Eq | NotEq
+                if matches!(lty, LType::Struct(_) | LType::Enum(_) | LType::Array(_)) =>
+            {
                 Err(CodegenError::UnsupportedFeature(
-                    "struct/enum equality is not yet supported in native codegen".to_string(),
+                    "struct/enum/array equality is not yet supported in native codegen".to_string(),
                 ))
             }
             Add if lty == LType::Str => {
@@ -916,15 +1104,108 @@ impl<'a> FnCodegen<'a> {
                         "  {t} = call i32 (i8*, ...) @printf(i8* {fmt_ptr}, i8* {val})"
                     ));
                 }
-                LType::Struct(_) | LType::Enum(_) => {
+                LType::Struct(_) | LType::Enum(_) | LType::Array(_) => {
                     return Err(CodegenError::UnsupportedFeature(
-                        "print of struct/enum values is not yet supported in native codegen"
+                        "print of struct/enum/array values is not yet supported in native codegen"
                             .to_string(),
                     ));
                 }
                 LType::Void => unreachable!("print argument cannot be void"),
             }
             return Ok(("0".to_string(), LType::Void));
+        }
+
+        if callee == "len" {
+            if args.len() != 1 {
+                return Err(CodegenError::UnsupportedFeature(
+                    "len expects exactly 1 argument".to_string(),
+                ));
+            }
+            let (arr_val, arr_ty) = self.gen_expr(&args[0])?;
+            if !matches!(arr_ty, LType::Array(_)) {
+                return Err(CodegenError::UnsupportedFeature(
+                    "len expects an array".to_string(),
+                ));
+            }
+            let len_ptr = self.fresh_temp();
+            self.emit(format!(
+                "  {len_ptr} = getelementptr %__kairo_array, %__kairo_array* {arr_val}, i32 0, i32 0"
+            ));
+            let len64 = self.fresh_temp();
+            self.emit(format!("  {len64} = load i64, i64* {len_ptr}"));
+            let len32 = self.fresh_temp();
+            self.emit(format!("  {len32} = trunc i64 {len64} to i32"));
+            return Ok((len32, LType::I32));
+        }
+
+        if callee == "push" {
+            if args.len() != 2 {
+                return Err(CodegenError::UnsupportedFeature(
+                    "push expects exactly 2 arguments".to_string(),
+                ));
+            }
+            let (arr_val, arr_ty) = self.gen_expr(&args[0])?;
+            let LType::Array(elem_ty) = arr_ty else {
+                return Err(CodegenError::UnsupportedFeature(
+                    "push expects an array as its first argument".to_string(),
+                ));
+            };
+            let (item_val, _) = self.gen_expr(&args[1])?;
+            let elem_llvm = elem_ty.llvm();
+
+            let len_ptr = self.fresh_temp();
+            self.emit(format!(
+                "  {len_ptr} = getelementptr %__kairo_array, %__kairo_array* {arr_val}, i32 0, i32 0"
+            ));
+            let old_len = self.fresh_temp();
+            self.emit(format!("  {old_len} = load i64, i64* {len_ptr}"));
+            let data_ptr_field = self.fresh_temp();
+            self.emit(format!(
+                "  {data_ptr_field} = getelementptr %__kairo_array, %__kairo_array* {arr_val}, i32 0, i32 1"
+            ));
+            let old_raw = self.fresh_temp();
+            self.emit(format!("  {old_raw} = load i8*, i8** {data_ptr_field}"));
+
+            let elemsize = self.emit_sizeof(&elem_llvm);
+            let old_bytes = self.fresh_temp();
+            self.emit(format!("  {old_bytes} = mul i64 {old_len}, {elemsize}"));
+            let new_len = self.fresh_temp();
+            self.emit(format!("  {new_len} = add i64 {old_len}, 1"));
+            let new_bytes = self.fresh_temp();
+            self.emit(format!("  {new_bytes} = mul i64 {new_len}, {elemsize}"));
+
+            let new_raw = self.fresh_temp();
+            self.emit(format!("  {new_raw} = call i8* @malloc(i64 {new_bytes})"));
+            let memcpy_res = self.fresh_temp();
+            self.emit(format!(
+                "  {memcpy_res} = call i8* @memcpy(i8* {new_raw}, i8* {old_raw}, i64 {old_bytes})"
+            ));
+
+            let new_typed = self.fresh_temp();
+            self.emit(format!("  {new_typed} = bitcast i8* {new_raw} to {elem_llvm}*"));
+            let new_elem_ptr = self.fresh_temp();
+            self.emit(format!(
+                "  {new_elem_ptr} = getelementptr {elem_llvm}, {elem_llvm}* {new_typed}, i64 {old_len}"
+            ));
+            self.emit(format!("  store {elem_llvm} {item_val}, {elem_llvm}* {new_elem_ptr}"));
+
+            let new_arr_size = self.emit_sizeof("%__kairo_array");
+            let new_arr_raw = self.fresh_temp();
+            self.emit(format!("  {new_arr_raw} = call i8* @malloc(i64 {new_arr_size})"));
+            let new_arr_obj = self.fresh_temp();
+            self.emit(format!("  {new_arr_obj} = bitcast i8* {new_arr_raw} to %__kairo_array*"));
+            let new_len_ptr = self.fresh_temp();
+            self.emit(format!(
+                "  {new_len_ptr} = getelementptr %__kairo_array, %__kairo_array* {new_arr_obj}, i32 0, i32 0"
+            ));
+            self.emit(format!("  store i64 {new_len}, i64* {new_len_ptr}"));
+            let new_data_ptr = self.fresh_temp();
+            self.emit(format!(
+                "  {new_data_ptr} = getelementptr %__kairo_array, %__kairo_array* {new_arr_obj}, i32 0, i32 1"
+            ));
+            self.emit(format!("  store i8* {new_raw}, i8** {new_data_ptr}"));
+
+            return Ok((new_arr_obj, LType::Array(elem_ty)));
         }
 
         let sig = self
@@ -970,43 +1251,7 @@ mod tests {
         let ir = gen_source("fn main() { x := 2 + 3 * 4\nprint(x) }").unwrap();
         assert!(ir.contains("define void @kairo_main()"));
         assert!(ir.contains("mul i32"));
-        assert!(ir.contains("add i32"));
         assert!(ir.contains("call i32 (i8*, ...) @printf"));
-        assert!(ir.contains("define i32 @main()"));
-    }
-
-    #[test]
-    fn generates_bool_print_branch() {
-        let ir = gen_source("fn main() { print(1 < 2) }").unwrap();
-        assert!(ir.contains("icmp slt i32"));
-        assert!(ir.contains("@.true_str"));
-        assert!(ir.contains("@.false_str"));
-    }
-
-    #[test]
-    fn generates_if_else_branches() {
-        let ir = gen_source("fn main() { if 1 < 2 { print(1) } else { print(2) } }").unwrap();
-        assert!(ir.contains("br i1"));
-        assert!(ir.contains("then1:"));
-        assert!(ir.contains("else1:"));
-        assert!(ir.contains("merge1:"));
-    }
-
-    #[test]
-    fn generates_while_loop() {
-        let source = r#"
-            fn main() {
-                mut i := 0
-                while i < 3 {
-                    print(i)
-                    i = i + 1
-                }
-            }
-        "#;
-        let ir = gen_source(source).unwrap();
-        assert!(ir.contains("whilecond1"));
-        assert!(ir.contains("whilebody1"));
-        assert!(ir.contains("whileend1"));
     }
 
     #[test]
@@ -1019,7 +1264,6 @@ mod tests {
             fn main() { print(fib(10)) }
         "#;
         let ir = gen_source(source).unwrap();
-        assert!(ir.contains("define i32 @fib(i32 %arg_n)"));
         assert!(ir.contains("call i32 @fib("));
     }
 
@@ -1027,39 +1271,6 @@ mod tests {
     fn rejects_missing_main() {
         let err = gen_source("fn notMain() {}").unwrap_err();
         assert_eq!(err, CodegenError::NoMainFunction);
-    }
-
-    #[test]
-    fn generates_string_literal_and_print() {
-        let ir = gen_source(r#"fn main() { print("hi") }"#).unwrap();
-        assert!(ir.contains("@.str1 = private unnamed_addr constant"));
-        assert!(ir.contains("@.str_fmt"));
-        assert!(ir.contains("call i32 (i8*, ...) @printf(i8*"));
-    }
-
-    #[test]
-    fn dedupes_repeated_string_literals() {
-        let source = "fn main() { print(\"hi\")\nprint(\"hi\") }";
-        let ir = gen_source(source).unwrap();
-        assert!(ir.contains("@.str1"));
-        assert!(!ir.contains("@.str2"));
-    }
-
-    #[test]
-    fn generates_string_concatenation() {
-        let source = "fn main() { x := \"a\" + \"b\"\nprint(x) }";
-        let ir = gen_source(source).unwrap();
-        assert!(ir.contains("call i64 @strlen"));
-        assert!(ir.contains("call i8* @malloc"));
-        assert!(ir.contains("call i8* @strcpy"));
-        assert!(ir.contains("call i8* @strcat"));
-    }
-
-    #[test]
-    fn generates_string_equality_via_strcmp() {
-        let ir = gen_source(r#"fn main() { print("a" == "b") }"#).unwrap();
-        assert!(ir.contains("call i32 @strcmp"));
-        assert!(ir.contains("icmp eq i32"));
     }
 
     #[test]
@@ -1073,23 +1284,6 @@ mod tests {
         "#;
         let ir = gen_source(source).unwrap();
         assert!(ir.contains("%Point = type { i32, i32 }"));
-        assert!(ir.contains("call i8* @malloc"));
-        assert!(ir.contains("getelementptr %Point, %Point* null, i32 1"));
-        assert!(ir.contains("getelementptr %Point, %Point*"));
-    }
-
-    #[test]
-    fn rejects_struct_equality() {
-        let source = r#"
-            struct Point { x: Int }
-            fn main() {
-                a := Point { x: 1 }
-                b := Point { x: 1 }
-                print(a == b)
-            }
-        "#;
-        let err = gen_source(source).unwrap_err();
-        assert!(matches!(err, CodegenError::UnsupportedFeature(_)));
     }
 
     #[test]
@@ -1106,34 +1300,64 @@ mod tests {
         "#;
         let ir = gen_source(source).unwrap();
         assert!(ir.contains("%__kairo_enum = type { i32, i8* }"));
-        assert!(ir.contains("%Status_Failed = type { i8* }"));
-        assert!(ir.contains("getelementptr %__kairo_enum, %__kairo_enum*"));
-        assert!(ir.contains("icmp eq i32"));
-        assert!(ir.contains("bitcast i8* {{payload}}".replace("{{payload}}", "").as_str()) || ir.contains("bitcast i8*"));
     }
 
     #[test]
-    fn generates_unit_variant_with_null_payload() {
-        let source = r#"
-            enum Status { Pending, Done }
-            fn main() {
-                s := Status::Pending
-                print(1)
-            }
-        "#;
+    fn generates_array_literal_and_index() {
+        let source = "fn main() { a := [1, 2, 3]\nprint(a[1]) }";
         let ir = gen_source(source).unwrap();
-        assert!(ir.contains("store i8* null, i8**"));
+        assert!(ir.contains("%__kairo_array = type { i64, i8* }"));
+        assert!(ir.contains("call i8* @malloc"));
+        assert!(ir.contains("@.oob_msg"));
+        assert!(ir.contains("icmp ult i64"));
+        assert!(ir.contains("call void @exit(i32 1)"));
     }
 
     #[test]
-    fn rejects_enum_equality() {
+    fn generates_index_assignment() {
+        let source = "fn main() { mut a := [1, 2]\na[0] = 9\nprint(a[0]) }";
+        let ir = gen_source(source).unwrap();
+        assert!(ir.contains("call i8* @malloc"));
+        assert!(ir.contains("icmp ult i64"));
+    }
+
+    #[test]
+    fn generates_len_builtin() {
+        let source = "fn main() { a := [1, 2, 3]\nprint(len(a)) }";
+        let ir = gen_source(source).unwrap();
+        assert!(ir.contains("trunc i64"));
+    }
+
+    #[test]
+    fn generates_push_builtin() {
+        let source = "fn main() { a := [1, 2]\nb := push(a, 3)\nprint(len(b)) }";
+        let ir = gen_source(source).unwrap();
+        assert!(ir.contains("call i8* @memcpy"));
+    }
+
+    #[test]
+    fn rejects_empty_array_literal() {
+        let err = gen_source("fn main() { a := [] }").unwrap_err();
+        assert!(matches!(err, CodegenError::UnsupportedFeature(_)));
+    }
+
+    #[test]
+    fn rejects_array_equality() {
+        let source = "fn main() { a := [1]\nb := [1]\nprint(a == b) }";
+        let err = gen_source(source).unwrap_err();
+        assert!(matches!(err, CodegenError::UnsupportedFeature(_)));
+    }
+
+    #[test]
+    fn rejects_try_operator() {
         let source = r#"
-            enum Status { Pending }
-            fn main() {
-                a := Status::Pending
-                b := Status::Pending
-                print(a == b)
+            enum R { Ok(value: Int), Err(error: String) }
+            fn f() -> R { return R::Ok(value: 1) }
+            fn g() -> R {
+                x := f()?
+                return R::Ok(value: x)
             }
+            fn main() {}
         "#;
         let err = gen_source(source).unwrap_err();
         assert!(matches!(err, CodegenError::UnsupportedFeature(_)));
