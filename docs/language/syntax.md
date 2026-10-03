@@ -453,3 +453,37 @@ Arrays, `?`, modules.
 `examples/native/status.kairo` — the same program from the v0.9
 interpreter match milestone — now compiles to a native executable
 and produces identical output to the interpreter.
+
+---
+
+# Kairo v0.19: native array support
+
+`kairo build` now supports arrays: literals, indexing (read/write),
+`len`, and `push`.
+
+## Implementation notes
+- Every array shares one physical LLVM type:
+  `%__kairo_array = type { i64, i8* }` — a length plus an opaque
+  element-buffer pointer. The actual element type is tracked only in
+  Rust's `LType`, not in LLVM's type system (same approach as the
+  enum tagged union in v0.18).
+- Out-of-bounds access (read or write) prints `index out of bounds`
+  and calls `exit(1)` — LLVM has no bounds-checked array primitive,
+  so this is the honest alternative to silent undefined behavior.
+  One unsigned comparison (`icmp ult`) catches negative indices too,
+  since a negative i64 reinterpreted as unsigned is enormous.
+- `push` follows the same value-semantics as the interpreter: it
+  allocates a new backing buffer and returns a new array header,
+  leaving the original array (and its buffer) untouched.
+- Array **equality** (`==`/`!=`) and empty array literals (`[]`,
+  whose element type can't be inferred without more type information
+  than this syntactic codegen pass has) are rejected.
+
+## Still not supported natively
+`?`, modules.
+
+## Verified
+`examples/native/arrays.kairo` — sum via loop+indexing, index
+assignment, `len`, value-semantics `push`, and an out-of-bounds
+access correctly terminating the process — all confirmed against a
+compiled native executable.
