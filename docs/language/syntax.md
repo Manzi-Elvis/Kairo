@@ -519,3 +519,42 @@ yet route a loader-merged multi-file `Program` into codegen the way
 `examples/native/try.kairo` — the same program from the v0.11
 interpreter milestone — compiles natively and produces identical
 output (`division by zero`).
+
+
+---
+
+# Kairo v0.21: native codegen reaches feature parity
+
+`kairo build` already supported multi-file modules as of v0.12 —
+`run`, `check`, and `build` have shared the same `kairo-loader`-based
+`compile()` function in the CLI since modules were introduced, so
+native codegen inherited module support automatically as each
+language feature (structs, enums, arrays, `?`) was added to it in
+later slices. This version is a verification and documentation
+milestone, not a new code slice.
+
+## Verified
+`examples/modules/main.kairo` (the two-file Point/distanceSquared
+program from v0.12) compiles via `kairo build` and produces output
+identical to `kairo run`.
+
+## Native codegen feature matrix (as of v0.21)
+| Feature | Native (`kairo build`) |
+|---|---|
+| Int/Bool/String | yes |
+| Structs | yes (equality not yet implemented) |
+| Enums + match | yes (equality not yet implemented) |
+| Arrays | yes, with bounds checking (equality not yet implemented) |
+| `?` operator | yes |
+| Modules | yes |
+
+Native codegen now covers the same language surface as the
+interpreter. Remaining differences are implementation-depth items,
+not missing features:
+- 32-bit Int (vs. the interpreter's 64-bit)
+- No real memory management (everything leaks via malloc)
+- Struct/enum/array equality not yet implemented in codegen
+- Division by zero is undefined behavior natively, vs. a clean error
+  in the interpreter
+- A non-returning function path gets a silent default value natively
+  rather than surfacing the interpreter's Unit-mismatch behavior
