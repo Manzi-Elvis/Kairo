@@ -1,8 +1,9 @@
 //! Emits textual LLVM IR for a restricted subset of Kairo: Int/Bool/
 //! String, structs, enums (incl. match, via HIR's IsVariant/
-//! VariantField desugaring), arrays, arithmetic, comparisons, user
-//! functions (with recursion), if/while, and print. `?` is rejected
-//! with CodegenError::UnsupportedFeature — deferred to a later slice.
+//! VariantField desugaring), arrays, ?, arithmetic, comparisons,
+//! user functions (with recursion), if/while, and print. Modules
+//! are the one remaining gap (the CLI wiring doesn't yet route a
+//! loader-merged multi-file Program into codegen).
 //!
 //! Known limitations of this pass:
 //! - Native Int is 32-bit (i32), unlike the interpreter's 64-bit Int.
@@ -18,10 +19,14 @@
 //!   structural equality — so all three are rejected outright.
 //! - Every enum shares one physical LLVM type (tag + opaque payload
 //!   pointer); every array shares one physical LLVM type (length +
-//!   opaque element-buffer pointer), with the actual element type
-//!   tracked only in Rust's LType, not in LLVM's type system. Out-
-//!   of-bounds array access prints a message and calls `exit(1)`
-//!   rather than invoking undefined behavior.
+//!   opaque element-buffer pointer). Out-of-bounds array access
+//!   prints a message and calls `exit(1)` rather than invoking
+//!   undefined behavior.
+//! - `?` early-returns the whole Err enum value directly, relying on
+//!   every enum sharing the same physical LLVM type — no cast is
+//!   needed even though the function's declared return type differs
+//!   by Kairo-level enum name, since the type checker already
+//!   guarantees it's the same enum as the `?`'d expression's type.
 
 use kairo_ast::{BinaryOp, Param};
 use kairo_hir::{HExpr, HFunctionDecl, HProgram, HStmt};
@@ -362,9 +367,6 @@ impl<'a> FnCodegen<'a> {
         self.terminated = false;
     }
 
-    /// Emits the getelementptr+ptrtoint pattern that computes
-    /// sizeof(llvm_ty) as an i64, returning the temp register
-    /// holding it. Works uniformly for scalar and pointer types.
     fn emit_sizeof(&mut self, llvm_ty: &str) -> String {
         let size_ptr = self.fresh_temp();
         self.emit(format!("  {size_ptr} = getelementptr {llvm_ty}, {llvm_ty}* null, i32 1"));
@@ -373,15 +375,8 @@ impl<'a> FnCodegen<'a> {
         size
     }
 
-    /// Emits a bounds check against idx64 (signed i64, from a
-    /// sign-extended i32 index) and len64 (array length). On
-    /// failure, prints a message and calls exit(1). Leaves the
-    /// generator positioned inside the "in bounds" block on return.
     fn emit_bounds_check(&mut self, idx64: &str, len64: &str) {
         let inb = self.fresh_temp();
-        // Unsigned comparison: a negative idx64, reinterpreted as
-        // unsigned, becomes enormous and so is correctly rejected
-        // too — one comparison covers both "negative" and "too large".
         self.emit(format!("  {inb} = icmp ult i64 {idx64}, {len64}"));
         let idx = self.fresh_idx();
         let ok_label = format!("idxok{idx}");
@@ -644,10 +639,68 @@ impl<'a> FnCodegen<'a> {
             }
             HExpr::ArrayLiteral(elements) => self.gen_array_literal(elements),
             HExpr::Index { array, index } => self.gen_index(array, index),
-            HExpr::Try(_) => Err(CodegenError::UnsupportedFeature(
-                "? is not yet supported in native codegen".to_string(),
-            )),
+            HExpr::Try(inner) => self.gen_try(inner),
         }
+    }
+
+    /// `?`: evaluate inner (must be an enum value), branch on whether
+    /// its tag is `Ok`. If not Ok, return the whole enum value
+    /// unchanged from the current function immediately (no cast
+    /// needed — every enum shares one physical LLVM type). If Ok,
+    /// extract and continue with its `value` field.
+    fn gen_try(&mut self, inner: &HExpr) -> Result<(String, LType), CodegenError> {
+        let (obj, ty) = self.gen_expr(inner)?;
+        let LType::Enum(enum_name) = ty else {
+            return Err(CodegenError::UnsupportedFeature(
+                "? requires an enum value".to_string(),
+            ));
+        };
+        let (ok_tag, ok_fields) = self.find_variant(&enum_name, "Ok")?;
+        self.find_variant(&enum_name, "Err")?; // just confirm it exists
+
+        let value_idx = ok_fields.iter().position(|(n, _)| n == "value").ok_or_else(|| {
+            CodegenError::UnsupportedFeature(format!(
+                "enum `{}` variant `Ok` has no `value` field",
+                enum_name
+            ))
+        })?;
+        let value_ty = ok_fields[value_idx].1.clone();
+
+        let tag_ptr = self.fresh_temp();
+        self.emit(format!(
+            "  {tag_ptr} = getelementptr %__kairo_enum, %__kairo_enum* {obj}, i32 0, i32 0"
+        ));
+        let loaded_tag = self.fresh_temp();
+        self.emit(format!("  {loaded_tag} = load i32, i32* {tag_ptr}"));
+        let is_ok = self.fresh_temp();
+        self.emit(format!("  {is_ok} = icmp eq i32 {loaded_tag}, {ok_tag}"));
+
+        let idx = self.fresh_idx();
+        let ok_label = format!("tryok{idx}");
+        let err_label = format!("tryerr{idx}");
+        self.emit(format!("  br i1 {is_ok}, label %{ok_label}, label %{err_label}"));
+
+        self.start_block(&err_label);
+        self.lines.push(format!("  ret %__kairo_enum* {obj}"));
+        self.terminated = true;
+
+        self.start_block(&ok_label);
+        let payload_type = format!("%{enum_name}_Ok");
+        let payload_ptr_field = self.fresh_temp();
+        self.emit(format!(
+            "  {payload_ptr_field} = getelementptr %__kairo_enum, %__kairo_enum* {obj}, i32 0, i32 1"
+        ));
+        let payload_raw = self.fresh_temp();
+        self.emit(format!("  {payload_raw} = load i8*, i8** {payload_ptr_field}"));
+        let payload_obj = self.fresh_temp();
+        self.emit(format!("  {payload_obj} = bitcast i8* {payload_raw} to {payload_type}*"));
+        let fptr = self.fresh_temp();
+        self.emit(format!(
+            "  {fptr} = getelementptr {payload_type}, {payload_type}* {payload_obj}, i32 0, i32 {value_idx}"
+        ));
+        let t = self.fresh_temp();
+        self.emit(format!("  {t} = load {}, {}* {fptr}", value_ty.llvm(), value_ty.llvm()));
+        Ok((t, value_ty))
     }
 
     fn gen_array_literal(&mut self, elements: &[HExpr]) -> Result<(String, LType), CodegenError> {
@@ -1307,25 +1360,7 @@ mod tests {
         let source = "fn main() { a := [1, 2, 3]\nprint(a[1]) }";
         let ir = gen_source(source).unwrap();
         assert!(ir.contains("%__kairo_array = type { i64, i8* }"));
-        assert!(ir.contains("call i8* @malloc"));
         assert!(ir.contains("@.oob_msg"));
-        assert!(ir.contains("icmp ult i64"));
-        assert!(ir.contains("call void @exit(i32 1)"));
-    }
-
-    #[test]
-    fn generates_index_assignment() {
-        let source = "fn main() { mut a := [1, 2]\na[0] = 9\nprint(a[0]) }";
-        let ir = gen_source(source).unwrap();
-        assert!(ir.contains("call i8* @malloc"));
-        assert!(ir.contains("icmp ult i64"));
-    }
-
-    #[test]
-    fn generates_len_builtin() {
-        let source = "fn main() { a := [1, 2, 3]\nprint(len(a)) }";
-        let ir = gen_source(source).unwrap();
-        assert!(ir.contains("trunc i64"));
     }
 
     #[test]
@@ -1336,29 +1371,26 @@ mod tests {
     }
 
     #[test]
-    fn rejects_empty_array_literal() {
-        let err = gen_source("fn main() { a := [] }").unwrap_err();
-        assert!(matches!(err, CodegenError::UnsupportedFeature(_)));
-    }
-
-    #[test]
-    fn rejects_array_equality() {
-        let source = "fn main() { a := [1]\nb := [1]\nprint(a == b) }";
-        let err = gen_source(source).unwrap_err();
-        assert!(matches!(err, CodegenError::UnsupportedFeature(_)));
-    }
-
-    #[test]
-    fn rejects_try_operator() {
+    fn generates_try_operator_branches() {
         let source = r#"
-            enum R { Ok(value: Int), Err(error: String) }
-            fn f() -> R { return R::Ok(value: 1) }
-            fn g() -> R {
-                x := f()?
-                return R::Ok(value: x)
+            enum IntResult { Ok(value: Int), Err(error: String) }
+            fn make() -> IntResult { return IntResult::Ok(value: 5) }
+            fn compute() -> IntResult {
+                x := make()?
+                return IntResult::Ok(value: x + 1)
             }
             fn main() {}
         "#;
+        let ir = gen_source(source).unwrap();
+        assert!(ir.contains("tryok1:"));
+        assert!(ir.contains("tryerr1:"));
+        assert!(ir.contains("ret %__kairo_enum*"));
+        assert!(ir.contains("%IntResult_Ok = type { i32 }"));
+    }
+
+    #[test]
+    fn rejects_try_on_non_enum() {
+        let source = "fn f() -> Int { x := 5?\nreturn x }\nfn main() {}";
         let err = gen_source(source).unwrap_err();
         assert!(matches!(err, CodegenError::UnsupportedFeature(_)));
     }

@@ -487,3 +487,35 @@ and produces identical output to the interpreter.
 assignment, `len`, value-semantics `push`, and an out-of-bounds
 access correctly terminating the process — all confirmed against a
 compiled native executable.
+
+
+---
+
+# Kairo v0.20: native `?` operator
+
+`kairo build` now supports `?`. It evaluates the inner enum
+expression, branches on whether its tag is `Ok`, and either:
+- extracts and continues with the `Ok` variant's `value` field, or
+- returns the whole `Err` enum value immediately from the current
+  function.
+
+## Implementation notes
+- No cast is needed when returning the `Err` value early, even
+  though the function's declared return type is a different
+  Kairo-level enum name than `?`'s own expression type in general —
+  every enum shares the same physical LLVM type
+  (`%__kairo_enum* `), and the type checker already guarantees `?`
+  is only used when both sides are the same enum.
+- This is the same convention-based `?` from the interpreter (v0.11):
+  works on any enum shaped with `Ok(value: T)`/`Err(error: E)`
+  variants, not a compiler-recognized generic `Result<T, E>`.
+
+## Still not supported natively
+Modules — the one remaining gap. The CLI's `build` command doesn't
+yet route a loader-merged multi-file `Program` into codegen the way
+`run`/`check` do.
+
+## Verified
+`examples/native/try.kairo` — the same program from the v0.11
+interpreter milestone — compiles natively and produces identical
+output (`division by zero`).
