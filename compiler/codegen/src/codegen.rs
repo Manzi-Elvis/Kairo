@@ -2,12 +2,10 @@
 //! String, structs, enums (incl. match, via HIR's IsVariant/
 //! VariantField desugaring), arrays, ?, arithmetic, comparisons,
 //! user functions (with recursion), if/while, and print. Modules
-//! are the one remaining gap (the CLI wiring doesn't yet route a
-//! loader-merged multi-file Program into codegen).
+//! work too, since the CLI shares one loader-based `compile()` across
+//! run, check, and build.
 //!
 //! Known limitations of this pass:
-//! - Native Int is 32-bit (i32), unlike the interpreter's 64-bit Int.
-//! - Division by zero is undefined behavior in native code.
 //! - A function whose body doesn't explicitly return on every path
 //!   gets a trailing default return rather than the interpreter's
 //!   Unit-mismatch behavior.
@@ -28,6 +26,7 @@
 //!   by Kairo-level enum name, since the type checker already
 //!   guarantees it's the same enum as the `?`'d expression's type.
 
+const DIV_MSG: &str = "division by zero\n";
 use kairo_ast::{BinaryOp, Param};
 use kairo_hir::{HExpr, HFunctionDecl, HProgram, HStmt};
 use std::collections::{HashMap, HashSet};
@@ -43,7 +42,7 @@ pub enum CodegenError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum LType {
-    I32,
+    Int,
     I1,
     Str,
     Struct(String),
@@ -55,7 +54,7 @@ enum LType {
 impl LType {
     fn llvm(&self) -> String {
         match self {
-            LType::I32 => "i32".to_string(),
+            LType::Int => "i64".to_string(),
             LType::I1 => "i1".to_string(),
             LType::Str => "i8*".to_string(),
             LType::Struct(name) => format!("%{name}*"),
@@ -71,7 +70,7 @@ impl LType {
         enum_names: &HashSet<String>,
     ) -> Result<Self, CodegenError> {
         match name {
-            "Int" => Ok(LType::I32),
+            "Int" => Ok(LType::Int),
             "Bool" => Ok(LType::I1),
             "String" => Ok(LType::Str),
             other if struct_names.contains(other) => Ok(LType::Struct(other.to_string())),
@@ -134,14 +133,14 @@ pub fn generate(program: &HProgram) -> Result<String, CodegenError> {
     }
 
     let mut out = Vec::new();
-    out.push("declare i32 @printf(i8*, ...)".to_string());
+    out.push("declare Int @printf(i8*, ...)".to_string());
     out.push("declare i64 @strlen(i8*)".to_string());
     out.push("declare i8* @malloc(i64)".to_string());
     out.push("declare i8* @strcpy(i8*, i8*)".to_string());
     out.push("declare i8* @strcat(i8*, i8*)".to_string());
-    out.push("declare i32 @strcmp(i8*, i8*)".to_string());
+    out.push("declare Int @strcmp(i8*, i8*)".to_string());
     out.push("declare i8* @memcpy(i8*, i8*, i64)".to_string());
-    out.push("declare void @exit(i32)".to_string());
+    out.push("declare void @exit(Int)".to_string());
 
     for s in &program.structs {
         let field_types: Vec<String> =
@@ -150,7 +149,7 @@ pub fn generate(program: &HProgram) -> Result<String, CodegenError> {
     }
 
     if !program.enums.is_empty() {
-        out.push("%__kairo_enum = type { i32, i8* }".to_string());
+        out.push("%__kairo_enum = type { Int, i8* }".to_string());
         for e in &program.enums {
             for (variant_name, fields) in &enum_types[&e.name] {
                 if fields.is_empty() {
@@ -169,13 +168,18 @@ pub fn generate(program: &HProgram) -> Result<String, CodegenError> {
 
     out.push("%__kairo_array = type { i64, i8* }".to_string());
 
-    out.push(r#"@.int_fmt = private unnamed_addr constant [4 x i8] c"%d\0A\00""#.to_string());
+    out.push(r#"@.int_fmt = private unnamed_addr constant [6 x i8] c"%lld\0A\00""#.to_string());
     out.push(r#"@.str_fmt = private unnamed_addr constant [4 x i8] c"%s\0A\00""#.to_string());
     out.push(r#"@.true_str = private unnamed_addr constant [6 x i8] c"true\0A\00""#.to_string());
     out.push(r#"@.false_str = private unnamed_addr constant [7 x i8] c"false\0A\00""#.to_string());
     let (oob_escaped, oob_len) = llvm_escape_string("index out of bounds\n");
     out.push(format!(
         "@.oob_msg = private unnamed_addr constant [{oob_len} x i8] c\"{oob_escaped}\""
+    ));
+
+    let (div_escaped, div_len) = llvm_escape_string(DIV_MSG);
+    out.push(format!(
+        "@.div_msg = private unnamed_addr constant [{div_len} x i8] c\"{div_escaped}\""
     ));
 
     let mut string_globals: HashMap<String, (String, usize)> = HashMap::new();
@@ -205,12 +209,11 @@ pub fn generate(program: &HProgram) -> Result<String, CodegenError> {
     out.push(gen.generate_function(&renamed, main_sig)?);
     out.push(String::new());
 
-    out.push("define i32 @main() {".to_string());
+    out.push("define Int @main() {".to_string());
     out.push("entry:".to_string());
     out.push("  call void @kairo_main()".to_string());
-    out.push("  ret i32 0".to_string());
+    out.push("  ret Int 0".to_string());
     out.push("}".to_string());
-
     Ok(out.join("\n"))
 }
 
@@ -369,7 +372,7 @@ impl<'a> FnCodegen<'a> {
 
     fn emit_sizeof(&mut self, llvm_ty: &str) -> String {
         let size_ptr = self.fresh_temp();
-        self.emit(format!("  {size_ptr} = getelementptr {llvm_ty}, {llvm_ty}* null, i32 1"));
+        self.emit(format!("  {size_ptr} = getelementptr {llvm_ty}, {llvm_ty}* null, Int 1"));
         let size = self.fresh_temp();
         self.emit(format!("  {size} = ptrtoint {llvm_ty}* {size_ptr} to i64"));
         size
@@ -387,10 +390,10 @@ impl<'a> FnCodegen<'a> {
         let msgp = self.fresh_temp();
         let len = self.oob_len;
         self.emit(format!(
-            "  {msgp} = getelementptr [{len} x i8], [{len} x i8]* @.oob_msg, i32 0, i32 0"
+            "  {msgp} = getelementptr [{len} x i8], [{len} x i8]* @.oob_msg, Int 0, Int 0"
         ));
-        self.emit(format!("  call i32 (i8*, ...) @printf(i8* {msgp})"));
-        self.emit("  call void @exit(i32 1)".to_string());
+        self.emit(format!("  call Int (i8*, ...) @printf(i8* {msgp})"));
+        self.emit("  call void @exit(Int 1)".to_string());
         self.lines.push("  unreachable".to_string());
         self.terminated = true;
 
@@ -433,7 +436,7 @@ impl<'a> FnCodegen<'a> {
         if !self.terminated {
             match &ret_ty {
                 LType::Void => self.lines.push("  ret void".to_string()),
-                LType::I32 => self.lines.push("  ret i32 0".to_string()),
+                LType::Int => self.lines.push("  ret i64 0".to_string()),
                 LType::I1 => self.lines.push("  ret i1 0".to_string()),
                 LType::Str => self.lines.push("  ret i8* null".to_string()),
                 LType::Struct(name) => self.lines.push(format!("  ret %{name}* null")),
@@ -493,13 +496,11 @@ impl<'a> FnCodegen<'a> {
                     "  {arr_val} = load %__kairo_array*, %__kairo_array** {slot}"
                 ));
 
-                let (idx_val, _) = self.gen_expr(index)?;
-                let idx64 = self.fresh_temp();
-                self.emit(format!("  {idx64} = sext i32 {idx_val} to i64"));
+                let (idx64, _) = self.gen_expr(index)?;
 
                 let len_ptr = self.fresh_temp();
                 self.emit(format!(
-                    "  {len_ptr} = getelementptr %__kairo_array, %__kairo_array* {arr_val}, i32 0, i32 0"
+                    "  {len_ptr} = getelementptr %__kairo_array, %__kairo_array* {arr_val}, Int 0, Int 0"
                 ));
                 let len64 = self.fresh_temp();
                 self.emit(format!("  {len64} = load i64, i64* {len_ptr}"));
@@ -508,7 +509,7 @@ impl<'a> FnCodegen<'a> {
 
                 let data_field = self.fresh_temp();
                 self.emit(format!(
-                    "  {data_field} = getelementptr %__kairo_array, %__kairo_array* {arr_val}, i32 0, i32 1"
+                    "  {data_field} = getelementptr %__kairo_array, %__kairo_array* {arr_val}, Int 0, Int 1"
                 ));
                 let raw = self.fresh_temp();
                 self.emit(format!("  {raw} = load i8*, i8** {data_field}"));
@@ -600,7 +601,7 @@ impl<'a> FnCodegen<'a> {
 
     fn gen_expr(&mut self, expr: &HExpr) -> Result<(String, LType), CodegenError> {
         match expr {
-            HExpr::IntLiteral(v) => Ok((v.to_string(), LType::I32)),
+            HExpr::IntLiteral(v) => Ok((v.to_string(), LType::Int)),
             HExpr::BoolLiteral(b) => Ok((if *b { "1" } else { "0" }.to_string(), LType::I1)),
             HExpr::StringLiteral(s) => {
                 let (label, len) = self
@@ -610,7 +611,7 @@ impl<'a> FnCodegen<'a> {
                     .expect("string literal precollected by collect_string_literals");
                 let t = self.fresh_temp();
                 self.emit(format!(
-                    "  {t} = getelementptr [{len} x i8], [{len} x i8]* {label}, i32 0, i32 0"
+                    "  {t} = getelementptr [{len} x i8], [{len} x i8]* {label}, Int 0, Int 0"
                 ));
                 Ok((t, LType::Str))
             }
@@ -668,12 +669,12 @@ impl<'a> FnCodegen<'a> {
 
         let tag_ptr = self.fresh_temp();
         self.emit(format!(
-            "  {tag_ptr} = getelementptr %__kairo_enum, %__kairo_enum* {obj}, i32 0, i32 0"
+            "  {tag_ptr} = getelementptr %__kairo_enum, %__kairo_enum* {obj}, Int 0, Int 0"
         ));
         let loaded_tag = self.fresh_temp();
-        self.emit(format!("  {loaded_tag} = load i32, i32* {tag_ptr}"));
+        self.emit(format!("  {loaded_tag} = load Int, Int* {tag_ptr}"));
         let is_ok = self.fresh_temp();
-        self.emit(format!("  {is_ok} = icmp eq i32 {loaded_tag}, {ok_tag}"));
+        self.emit(format!("  {is_ok} = icmp eq Int {loaded_tag}, {ok_tag}"));
 
         let idx = self.fresh_idx();
         let ok_label = format!("tryok{idx}");
@@ -688,7 +689,7 @@ impl<'a> FnCodegen<'a> {
         let payload_type = format!("%{enum_name}_Ok");
         let payload_ptr_field = self.fresh_temp();
         self.emit(format!(
-            "  {payload_ptr_field} = getelementptr %__kairo_enum, %__kairo_enum* {obj}, i32 0, i32 1"
+            "  {payload_ptr_field} = getelementptr %__kairo_enum, %__kairo_enum* {obj}, Int 0, Int 1"
         ));
         let payload_raw = self.fresh_temp();
         self.emit(format!("  {payload_raw} = load i8*, i8** {payload_ptr_field}"));
@@ -696,7 +697,7 @@ impl<'a> FnCodegen<'a> {
         self.emit(format!("  {payload_obj} = bitcast i8* {payload_raw} to {payload_type}*"));
         let fptr = self.fresh_temp();
         self.emit(format!(
-            "  {fptr} = getelementptr {payload_type}, {payload_type}* {payload_obj}, i32 0, i32 {value_idx}"
+            "  {fptr} = getelementptr {payload_type}, {payload_type}* {payload_obj}, Int 0, Int {value_idx}"
         ));
         let t = self.fresh_temp();
         self.emit(format!("  {t} = load {}, {}* {fptr}", value_ty.llvm(), value_ty.llvm()));
@@ -745,12 +746,12 @@ impl<'a> FnCodegen<'a> {
 
         let len_ptr = self.fresh_temp();
         self.emit(format!(
-            "  {len_ptr} = getelementptr %__kairo_array, %__kairo_array* {arr_obj}, i32 0, i32 0"
+            "  {len_ptr} = getelementptr %__kairo_array, %__kairo_array* {arr_obj}, Int 0, Int 0"
         ));
         self.emit(format!("  store i64 {count}, i64* {len_ptr}"));
         let data_ptr = self.fresh_temp();
         self.emit(format!(
-            "  {data_ptr} = getelementptr %__kairo_array, %__kairo_array* {arr_obj}, i32 0, i32 1"
+            "  {data_ptr} = getelementptr %__kairo_array, %__kairo_array* {arr_obj}, Int 0, Int 1"
         ));
         self.emit(format!("  store i8* {buf_raw}, i8** {data_ptr}"));
 
@@ -765,13 +766,11 @@ impl<'a> FnCodegen<'a> {
             ));
         };
 
-        let (idx_val, _) = self.gen_expr(index)?;
-        let idx64 = self.fresh_temp();
-        self.emit(format!("  {idx64} = sext i32 {idx_val} to i64"));
+        let (idx64, _) = self.gen_expr(index)?;
 
         let len_ptr = self.fresh_temp();
         self.emit(format!(
-            "  {len_ptr} = getelementptr %__kairo_array, %__kairo_array* {arr_val}, i32 0, i32 0"
+            "  {len_ptr} = getelementptr %__kairo_array, %__kairo_array* {arr_val}, Int 0, Int 0"
         ));
         let len64 = self.fresh_temp();
         self.emit(format!("  {len64} = load i64, i64* {len_ptr}"));
@@ -780,7 +779,7 @@ impl<'a> FnCodegen<'a> {
 
         let data_field = self.fresh_temp();
         self.emit(format!(
-            "  {data_field} = getelementptr %__kairo_array, %__kairo_array* {arr_val}, i32 0, i32 1"
+            "  {data_field} = getelementptr %__kairo_array, %__kairo_array* {arr_val}, Int 0, Int 1"
         ));
         let raw = self.fresh_temp();
         self.emit(format!("  {raw} = load i8*, i8** {data_field}"));
@@ -806,7 +805,7 @@ impl<'a> FnCodegen<'a> {
         })?;
 
         let size_ptr = self.fresh_temp();
-        self.emit(format!("  {size_ptr} = getelementptr %{name}, %{name}* null, i32 1"));
+        self.emit(format!("  {size_ptr} = getelementptr %{name}, %{name}* null, Int 1"));
         let size = self.fresh_temp();
         self.emit(format!("  {size} = ptrtoint %{name}* {size_ptr} to i64"));
         let raw = self.fresh_temp();
@@ -828,7 +827,7 @@ impl<'a> FnCodegen<'a> {
             let field_ty = &field_table[idx].1;
             let field_ptr = self.fresh_temp();
             self.emit(format!(
-                "  {field_ptr} = getelementptr %{name}, %{name}* {obj}, i32 0, i32 {idx}"
+                "  {field_ptr} = getelementptr %{name}, %{name}* {obj}, Int 0, Int {idx}"
             ));
             self.emit(format!(
                 "  store {} {val}, {}* {field_ptr}",
@@ -870,7 +869,7 @@ impl<'a> FnCodegen<'a> {
 
         let field_ptr = self.fresh_temp();
         self.emit(format!(
-            "  {field_ptr} = getelementptr %{struct_name}, %{struct_name}* {obj_val}, i32 0, i32 {idx}"
+            "  {field_ptr} = getelementptr %{struct_name}, %{struct_name}* {obj_val}, Int 0, Int {idx}"
         ));
         let t = self.fresh_temp();
         self.emit(format!("  {t} = load {}, {}* {field_ptr}", field_ty.llvm(), field_ty.llvm()));
@@ -907,7 +906,7 @@ impl<'a> FnCodegen<'a> {
 
         let union_size_ptr = self.fresh_temp();
         self.emit(format!(
-            "  {union_size_ptr} = getelementptr %__kairo_enum, %__kairo_enum* null, i32 1"
+            "  {union_size_ptr} = getelementptr %__kairo_enum, %__kairo_enum* null, Int 1"
         ));
         let union_size = self.fresh_temp();
         self.emit(format!("  {union_size} = ptrtoint %__kairo_enum* {union_size_ptr} to i64"));
@@ -918,13 +917,13 @@ impl<'a> FnCodegen<'a> {
 
         let tag_ptr = self.fresh_temp();
         self.emit(format!(
-            "  {tag_ptr} = getelementptr %__kairo_enum, %__kairo_enum* {union_obj}, i32 0, i32 0"
+            "  {tag_ptr} = getelementptr %__kairo_enum, %__kairo_enum* {union_obj}, Int 0, Int 0"
         ));
-        self.emit(format!("  store i32 {tag}, i32* {tag_ptr}"));
+        self.emit(format!("  store Int {tag}, Int* {tag_ptr}"));
 
         let payload_ptr_field = self.fresh_temp();
         self.emit(format!(
-            "  {payload_ptr_field} = getelementptr %__kairo_enum, %__kairo_enum* {union_obj}, i32 0, i32 1"
+            "  {payload_ptr_field} = getelementptr %__kairo_enum, %__kairo_enum* {union_obj}, Int 0, Int 1"
         ));
 
         if field_table.is_empty() {
@@ -933,7 +932,7 @@ impl<'a> FnCodegen<'a> {
             let payload_type = format!("%{enum_name}_{variant}");
             let psize_ptr = self.fresh_temp();
             self.emit(format!(
-                "  {psize_ptr} = getelementptr {payload_type}, {payload_type}* null, i32 1"
+                "  {psize_ptr} = getelementptr {payload_type}, {payload_type}* null, Int 1"
             ));
             let psize = self.fresh_temp();
             self.emit(format!("  {psize} = ptrtoint {payload_type}* {psize_ptr} to i64"));
@@ -956,7 +955,7 @@ impl<'a> FnCodegen<'a> {
                 let field_ty = &field_table[idx].1;
                 let fptr = self.fresh_temp();
                 self.emit(format!(
-                    "  {fptr} = getelementptr {payload_type}, {payload_type}* {payload_obj}, i32 0, i32 {idx}"
+                    "  {fptr} = getelementptr {payload_type}, {payload_type}* {payload_obj}, Int 0, Int {idx}"
                 ));
                 self.emit(format!("  store {} {val}, {}* {fptr}", field_ty.llvm(), field_ty.llvm()));
             }
@@ -978,12 +977,12 @@ impl<'a> FnCodegen<'a> {
 
         let tag_ptr = self.fresh_temp();
         self.emit(format!(
-            "  {tag_ptr} = getelementptr %__kairo_enum, %__kairo_enum* {obj}, i32 0, i32 0"
+            "  {tag_ptr} = getelementptr %__kairo_enum, %__kairo_enum* {obj}, Int 0, Int 0"
         ));
         let loaded_tag = self.fresh_temp();
-        self.emit(format!("  {loaded_tag} = load i32, i32* {tag_ptr}"));
+        self.emit(format!("  {loaded_tag} = load Int, Int* {tag_ptr}"));
         let t = self.fresh_temp();
-        self.emit(format!("  {t} = icmp eq i32 {loaded_tag}, {tag}"));
+        self.emit(format!("  {t} = icmp eq Int {loaded_tag}, {tag}"));
         Ok((t, LType::I1))
     }
 
@@ -1010,7 +1009,7 @@ impl<'a> FnCodegen<'a> {
         let (obj, _) = self.gen_expr(scrutinee)?;
         let payload_ptr_field = self.fresh_temp();
         self.emit(format!(
-            "  {payload_ptr_field} = getelementptr %__kairo_enum, %__kairo_enum* {obj}, i32 0, i32 1"
+            "  {payload_ptr_field} = getelementptr %__kairo_enum, %__kairo_enum* {obj}, Int 0, Int 1"
         ));
         let payload_raw = self.fresh_temp();
         self.emit(format!("  {payload_raw} = load i8*, i8** {payload_ptr_field}"));
@@ -1019,7 +1018,7 @@ impl<'a> FnCodegen<'a> {
 
         let fptr = self.fresh_temp();
         self.emit(format!(
-            "  {fptr} = getelementptr {payload_type}, {payload_type}* {payload_obj}, i32 0, i32 {idx}"
+            "  {fptr} = getelementptr {payload_type}, {payload_type}* {payload_obj}, Int 0, Int {idx}"
         ));
         let t = self.fresh_temp();
         self.emit(format!("  {t} = load {}, {}* {fptr}", field_ty.llvm(), field_ty.llvm()));
@@ -1063,35 +1062,64 @@ impl<'a> FnCodegen<'a> {
             }
             Eq if lty == LType::Str => {
                 let cmp = self.fresh_temp();
-                self.emit(format!("  {cmp} = call i32 @strcmp(i8* {l}, i8* {r})"));
+                self.emit(format!("  {cmp} = call Int @strcmp(i8* {l}, i8* {r})"));
                 let t = self.fresh_temp();
-                self.emit(format!("  {t} = icmp eq i32 {cmp}, 0"));
+                self.emit(format!("  {t} = icmp eq Int {cmp}, 0"));
                 Ok((t, LType::I1))
             }
             NotEq if lty == LType::Str => {
                 let cmp = self.fresh_temp();
-                self.emit(format!("  {cmp} = call i32 @strcmp(i8* {l}, i8* {r})"));
+                self.emit(format!("  {cmp} = call Int @strcmp(i8* {l}, i8* {r})"));
                 let t = self.fresh_temp();
-                self.emit(format!("  {t} = icmp ne i32 {cmp}, 0"));
+                self.emit(format!("  {t} = icmp ne Int {cmp}, 0"));
                 Ok((t, LType::I1))
+            }
+            Div => {
+                // Print a message and exit(1) on a zero divisor, matching
+                // the interpreter's clean DivisionByZero error instead of
+                // LLVM's undefined behavior for sdiv.
+                let is_zero = self.fresh_temp();
+                self.emit(format!("  {is_zero} = icmp eq i64 {r}, 0"));
+                let idx = self.fresh_idx();
+                let ok_label = format!("divok{idx}");
+                let zero_label = format!("divzero{idx}");
+                self.emit(format!(
+                    "  br i1 {is_zero}, label %{zero_label}, label %{ok_label}"
+                ));
+
+                self.start_block(&zero_label);
+                let len = llvm_escape_string(DIV_MSG).1;
+                let msgp = self.fresh_temp();
+                self.emit(format!(
+                    "  {msgp} = getelementptr [{len} x i8], [{len} x i8]* @.div_msg, Int 0, Int 0"
+                ));
+                self.emit(format!("  call Int (i8*, ...) @printf(i8* {msgp})"));
+                self.emit("  call void @exit(Int 1)".to_string());
+                self.lines.push("  unreachable".to_string());
+                self.terminated = true;
+
+                self.start_block(&ok_label);
+                let t = self.fresh_temp();
+                self.emit(format!("  {t} = sdiv i64 {l}, {r}"));
+                Ok((t, LType::Int))
             }
             _ => {
                 let t = self.fresh_temp();
                 let (instr, result_ty) = match op {
-                    Add => (format!("add i32 {l}, {r}"), LType::I32),
-                    Sub => (format!("sub i32 {l}, {r}"), LType::I32),
-                    Mul => (format!("mul i32 {l}, {r}"), LType::I32),
-                    Div => (format!("sdiv i32 {l}, {r}"), LType::I32),
-                    Lt => (format!("icmp slt i32 {l}, {r}"), LType::I1),
-                    Gt => (format!("icmp sgt i32 {l}, {r}"), LType::I1),
-                    Le => (format!("icmp sle i32 {l}, {r}"), LType::I1),
-                    Ge => (format!("icmp sge i32 {l}, {r}"), LType::I1),
+                    Add => (format!("add i64 {l}, {r}"), LType::Int),
+                    Sub => (format!("sub i64 {l}, {r}"), LType::Int),
+                    Mul => (format!("mul i64 {l}, {r}"), LType::Int),
+                    Div => unreachable!("handled by the dedicated Div arm above"),
+                    Lt => (format!("icmp slt i64 {l}, {r}"), LType::I1),
+                    Gt => (format!("icmp sgt i64 {l}, {r}"), LType::I1),
+                    Le => (format!("icmp sle i64 {l}, {r}"), LType::I1),
+                    Ge => (format!("icmp sge i64 {l}, {r}"), LType::I1),
                     Eq => {
-                        let ty = if lty == LType::I1 { "i1" } else { "i32" };
+                        let ty = if lty == LType::I1 { "i1" } else { "i64" };
                         (format!("icmp eq {ty} {l}, {r}"), LType::I1)
                     }
                     NotEq => {
-                        let ty = if lty == LType::I1 { "i1" } else { "i32" };
+                        let ty = if lty == LType::I1 { "i1" } else { "i64" };
                         (format!("icmp ne {ty} {l}, {r}"), LType::I1)
                     }
                 };
@@ -1110,14 +1138,14 @@ impl<'a> FnCodegen<'a> {
             }
             let (val, ty) = self.gen_expr(&args[0])?;
             match ty {
-                LType::I32 => {
+                LType::Int => {
                     let fmt_ptr = self.fresh_temp();
                     self.emit(format!(
-                        "  {fmt_ptr} = getelementptr [4 x i8], [4 x i8]* @.int_fmt, i32 0, i32 0"
+                        "  {fmt_ptr} = getelementptr [6 x i8], [6 x i8]* @.int_fmt, Int 0, Int 0"
                     ));
                     let t = self.fresh_temp();
                     self.emit(format!(
-                        "  {t} = call i32 (i8*, ...) @printf(i8* {fmt_ptr}, i32 {val})"
+                        "  {t} = call Int (i8*, ...) @printf(i8* {fmt_ptr}, i64 {val})"
                     ));
                 }
                 LType::I1 => {
@@ -1132,17 +1160,17 @@ impl<'a> FnCodegen<'a> {
                     self.start_block(&true_label);
                     let tp = self.fresh_temp();
                     self.emit(format!(
-                        "  {tp} = getelementptr [6 x i8], [6 x i8]* @.true_str, i32 0, i32 0"
+                        "  {tp} = getelementptr [6 x i8], [6 x i8]* @.true_str, Int 0, Int 0"
                     ));
-                    self.emit(format!("  call i32 (i8*, ...) @printf(i8* {tp})"));
+                    self.emit(format!("  call Int (i8*, ...) @printf(i8* {tp})"));
                     self.emit(format!("  br label %{end_label}"));
 
                     self.start_block(&false_label);
                     let fp = self.fresh_temp();
                     self.emit(format!(
-                        "  {fp} = getelementptr [7 x i8], [7 x i8]* @.false_str, i32 0, i32 0"
+                        "  {fp} = getelementptr [7 x i8], [7 x i8]* @.false_str, Int 0, Int 0"
                     ));
-                    self.emit(format!("  call i32 (i8*, ...) @printf(i8* {fp})"));
+                    self.emit(format!("  call Int (i8*, ...) @printf(i8* {fp})"));
                     self.emit(format!("  br label %{end_label}"));
 
                     self.start_block(&end_label);
@@ -1150,11 +1178,11 @@ impl<'a> FnCodegen<'a> {
                 LType::Str => {
                     let fmt_ptr = self.fresh_temp();
                     self.emit(format!(
-                        "  {fmt_ptr} = getelementptr [4 x i8], [4 x i8]* @.str_fmt, i32 0, i32 0"
+                        "  {fmt_ptr} = getelementptr [4 x i8], [4 x i8]* @.str_fmt, Int 0, Int 0"
                     ));
                     let t = self.fresh_temp();
                     self.emit(format!(
-                        "  {t} = call i32 (i8*, ...) @printf(i8* {fmt_ptr}, i8* {val})"
+                        "  {t} = call Int (i8*, ...) @printf(i8* {fmt_ptr}, i8* {val})"
                     ));
                 }
                 LType::Struct(_) | LType::Enum(_) | LType::Array(_) => {
@@ -1182,13 +1210,11 @@ impl<'a> FnCodegen<'a> {
             }
             let len_ptr = self.fresh_temp();
             self.emit(format!(
-                "  {len_ptr} = getelementptr %__kairo_array, %__kairo_array* {arr_val}, i32 0, i32 0"
+                "  {len_ptr} = getelementptr %__kairo_array, %__kairo_array* {arr_val}, Int 0, Int 0"
             ));
             let len64 = self.fresh_temp();
             self.emit(format!("  {len64} = load i64, i64* {len_ptr}"));
-            let len32 = self.fresh_temp();
-            self.emit(format!("  {len32} = trunc i64 {len64} to i32"));
-            return Ok((len32, LType::I32));
+            return Ok((len64, LType::Int));
         }
 
         if callee == "push" {
@@ -1208,13 +1234,13 @@ impl<'a> FnCodegen<'a> {
 
             let len_ptr = self.fresh_temp();
             self.emit(format!(
-                "  {len_ptr} = getelementptr %__kairo_array, %__kairo_array* {arr_val}, i32 0, i32 0"
+                "  {len_ptr} = getelementptr %__kairo_array, %__kairo_array* {arr_val}, Int 0, Int 0"
             ));
             let old_len = self.fresh_temp();
             self.emit(format!("  {old_len} = load i64, i64* {len_ptr}"));
             let data_ptr_field = self.fresh_temp();
             self.emit(format!(
-                "  {data_ptr_field} = getelementptr %__kairo_array, %__kairo_array* {arr_val}, i32 0, i32 1"
+                "  {data_ptr_field} = getelementptr %__kairo_array, %__kairo_array* {arr_val}, Int 0, Int 1"
             ));
             let old_raw = self.fresh_temp();
             self.emit(format!("  {old_raw} = load i8*, i8** {data_ptr_field}"));
@@ -1249,12 +1275,12 @@ impl<'a> FnCodegen<'a> {
             self.emit(format!("  {new_arr_obj} = bitcast i8* {new_arr_raw} to %__kairo_array*"));
             let new_len_ptr = self.fresh_temp();
             self.emit(format!(
-                "  {new_len_ptr} = getelementptr %__kairo_array, %__kairo_array* {new_arr_obj}, i32 0, i32 0"
+                "  {new_len_ptr} = getelementptr %__kairo_array, %__kairo_array* {new_arr_obj}, Int 0, Int 0"
             ));
             self.emit(format!("  store i64 {new_len}, i64* {new_len_ptr}"));
             let new_data_ptr = self.fresh_temp();
             self.emit(format!(
-                "  {new_data_ptr} = getelementptr %__kairo_array, %__kairo_array* {new_arr_obj}, i32 0, i32 1"
+                "  {new_data_ptr} = getelementptr %__kairo_array, %__kairo_array* {new_arr_obj}, Int 0, Int 1"
             ));
             self.emit(format!("  store i8* {new_raw}, i8** {new_data_ptr}"));
 
@@ -1303,8 +1329,8 @@ mod tests {
     fn generates_int_arithmetic_and_print() {
         let ir = gen_source("fn main() { x := 2 + 3 * 4\nprint(x) }").unwrap();
         assert!(ir.contains("define void @kairo_main()"));
-        assert!(ir.contains("mul i32"));
-        assert!(ir.contains("call i32 (i8*, ...) @printf"));
+        assert!(ir.contains("mul i64"));
+        assert!(ir.contains("call Int (i8*, ...) @printf"));
     }
 
     #[test]
@@ -1317,7 +1343,7 @@ mod tests {
             fn main() { print(fib(10)) }
         "#;
         let ir = gen_source(source).unwrap();
-        assert!(ir.contains("call i32 @fib("));
+        assert!(ir.contains("call i64 @fib("));
     }
 
     #[test]
@@ -1336,7 +1362,7 @@ mod tests {
             }
         "#;
         let ir = gen_source(source).unwrap();
-        assert!(ir.contains("%Point = type { i32, i32 }"));
+        assert!(ir.contains("%Point = type { i64, i64 }"));
     }
 
     #[test]
@@ -1352,7 +1378,7 @@ mod tests {
             }
         "#;
         let ir = gen_source(source).unwrap();
-        assert!(ir.contains("%__kairo_enum = type { i32, i8* }"));
+        assert!(ir.contains("%__kairo_enum = type { Int, i8* }"));
     }
 
     #[test]
@@ -1385,7 +1411,7 @@ mod tests {
         assert!(ir.contains("tryok1:"));
         assert!(ir.contains("tryerr1:"));
         assert!(ir.contains("ret %__kairo_enum*"));
-        assert!(ir.contains("%IntResult_Ok = type { i32 }"));
+        assert!(ir.contains("%IntResult_Ok = type { i64 }"));
     }
 
     #[test]
@@ -1393,5 +1419,20 @@ mod tests {
         let source = "fn f() -> Int { x := 5?\nreturn x }\nfn main() {}";
         let err = gen_source(source).unwrap_err();
         assert!(matches!(err, CodegenError::UnsupportedFeature(_)));
+    }
+
+    #[test]
+    fn generates_division_by_zero_check() {
+        let ir = gen_source("fn main() { print(10 / 2) }").unwrap();
+        assert!(ir.contains("icmp eq i64"));
+        assert!(ir.contains("divzero1:"));
+        assert!(ir.contains("@.div_msg"));
+        assert!(ir.contains("sdiv i64"));
+    }
+
+    #[test]
+    fn uses_64_bit_int_print_format() {
+        let ir = gen_source("fn main() { print(1) }").unwrap();
+        assert!(ir.contains(r#"c"%lld\0A\00""#));
     }
 }
