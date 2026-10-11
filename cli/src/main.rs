@@ -1,10 +1,10 @@
-use std::env;
-use std::process::ExitCode;
+use kairo_codegen::generate;
 use kairo_hir::lower_program;
 use kairo_interpreter::Interpreter;
 use kairo_loader::{load_program, LoadError, ModuleSource};
 use kairo_typecheck::TypeChecker;
-use kairo_codegen::generate;
+use std::env;
+use std::process::ExitCode;
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
@@ -168,13 +168,15 @@ fn compile(path: &str) -> Result<kairo_ast::Program, String> {
     let source = FsModuleSource { dir };
     let program = load_program(&entry_name, &source).map_err(|e| format!("load error: {e:?}"))?;
 
-    TypeChecker::new().check_program(&program).map_err(|errors| {
-        errors
-            .iter()
-            .map(|e| format!("type error: {e:?}"))
-            .collect::<Vec<_>>()
-            .join("\n")
-    })?;
+    TypeChecker::new()
+        .check_program(&program)
+        .map_err(|errors| {
+            errors
+                .iter()
+                .map(|e| format!("type error: {e:?}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })?;
 
     Ok(program)
 }

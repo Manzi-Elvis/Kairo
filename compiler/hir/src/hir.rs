@@ -32,12 +32,30 @@ pub struct HFunctionDecl {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum HStmt {
-    VariableDecl { name: String, value: HExpr, is_mutable: bool },
-    Assign { name: String, value: HExpr },
-    IndexAssign { name: String, index: HExpr, value: HExpr },
+    VariableDecl {
+        name: String,
+        value: HExpr,
+        is_mutable: bool,
+    },
+    Assign {
+        name: String,
+        value: HExpr,
+    },
+    IndexAssign {
+        name: String,
+        index: HExpr,
+        value: HExpr,
+    },
     Expr(HExpr),
-    If { condition: HExpr, then_branch: Vec<HStmt>, else_branch: Option<Vec<HStmt>> },
-    While { condition: HExpr, body: Vec<HStmt> },
+    If {
+        condition: HExpr,
+        then_branch: Vec<HStmt>,
+        else_branch: Option<Vec<HStmt>>,
+    },
+    While {
+        condition: HExpr,
+        body: Vec<HStmt>,
+    },
     Return(Option<HExpr>),
 }
 
@@ -47,19 +65,48 @@ pub enum HExpr {
     IntLiteral(i64),
     BoolLiteral(bool),
     Identifier(String),
-    Binary { left: Box<HExpr>, op: BinaryOp, right: Box<HExpr> },
-    Call { callee: String, args: Vec<HExpr> },
-    StructLiteral { name: String, fields: Vec<(String, HExpr)> },
-    FieldAccess { object: Box<HExpr>, field: String },
-    EnumLiteral { enum_name: String, variant: String, fields: Vec<(String, HExpr)> },
+    Binary {
+        left: Box<HExpr>,
+        op: BinaryOp,
+        right: Box<HExpr>,
+    },
+    Call {
+        callee: String,
+        args: Vec<HExpr>,
+    },
+    StructLiteral {
+        name: String,
+        fields: Vec<(String, HExpr)>,
+    },
+    FieldAccess {
+        object: Box<HExpr>,
+        field: String,
+    },
+    EnumLiteral {
+        enum_name: String,
+        variant: String,
+        fields: Vec<(String, HExpr)>,
+    },
     ArrayLiteral(Vec<HExpr>),
-    Index { array: Box<HExpr>, index: Box<HExpr> },
+    Index {
+        array: Box<HExpr>,
+        index: Box<HExpr>,
+    },
     /// Not desugared — see module docs.
     Try(Box<HExpr>),
     /// Replaces `Pattern::EnumVariant`/literal testing: "does
     /// `scrutinee` currently hold `enum_name::variant`?"
-    IsVariant { scrutinee: Box<HExpr>, enum_name: String, variant: String },
+    IsVariant {
+        scrutinee: Box<HExpr>,
+        enum_name: String,
+        variant: String,
+    },
     /// Replaces positional pattern binding: extracts one field by
     /// name from an enum value already known to be this variant.
-    VariantField { scrutinee: Box<HExpr>, enum_name: String, variant: String, field: String },
+    VariantField {
+        scrutinee: Box<HExpr>,
+        enum_name: String,
+        variant: String,
+        field: String,
+    },
 }

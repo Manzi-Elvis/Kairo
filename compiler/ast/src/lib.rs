@@ -90,7 +90,11 @@ pub enum Stmt {
     /// `name = <expr>` — reassigns an existing mutable variable
     Assign { name: String, value: Expr },
     /// `name[<expr>] = <expr>`
-    IndexAssign { name: String, index: Expr, value: Expr },
+    IndexAssign {
+        name: String,
+        index: Expr,
+        value: Expr,
+    },
     /// An expression evaluated for its side effect, e.g. `print(...)`
     Expr(Expr),
     /// `if <cond> { ... }` with an optional `else { ... }`
@@ -102,7 +106,10 @@ pub enum Stmt {
     /// `while <cond> { ... }`
     While { condition: Expr, body: Vec<Stmt> },
     /// `match <expr> { pattern => { ... }, ... }`
-    Match { scrutinee: Expr, arms: Vec<MatchArm> },
+    Match {
+        scrutinee: Expr,
+        arms: Vec<MatchArm>,
+    },
     /// `return <expr>` or bare `return`
     Return(Option<Expr>),
 }
@@ -134,9 +141,15 @@ pub enum Expr {
         fields: Vec<(String, Expr)>,
     },
     /// `<expr>.field`
-    FieldAccess { object: Box<Expr>, field: String },
+    FieldAccess {
+        object: Box<Expr>,
+        field: String,
+    },
     ArrayLiteral(Vec<Expr>),
-    Index { array: Box<Expr>, index: Box<Expr> },
+    Index {
+        array: Box<Expr>,
+        index: Box<Expr>,
+    },
     /// `<expr>?` — propagates Err early, unwraps Ok
     Try(Box<Expr>),
 }

@@ -1,4 +1,6 @@
-use kairo_ast::{BinaryOp, EnumDecl, Expr, FunctionDecl, MatchArm, Pattern, Program, Stmt, StructDecl};
+use kairo_ast::{
+    BinaryOp, EnumDecl, Expr, FunctionDecl, MatchArm, Pattern, Program, Stmt, StructDecl,
+};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,16 +36,33 @@ pub enum TypeError {
     UndefinedStruct(String),
     AlreadyDeclared(String),
     ImmutableAssignment(String),
-    Mismatch { expected: String, found: String, context: String },
+    Mismatch {
+        expected: String,
+        found: String,
+        context: String,
+    },
     CannotInferType(String),
-    WrongArgCount { callee: String, expected: usize, found: usize },
-    UnknownField { struct_name: String, field: String },
-    MissingField { struct_name: String, field: String },
+    WrongArgCount {
+        callee: String,
+        expected: usize,
+        found: usize,
+    },
+    UnknownField {
+        struct_name: String,
+        field: String,
+    },
+    MissingField {
+        struct_name: String,
+        field: String,
+    },
     DuplicateField(String),
     NotAStruct(String),
     NoMainFunction,
     UndefinedEnum(String),
-    UndefinedVariant { enum_name: String, variant: String },
+    UndefinedVariant {
+        enum_name: String,
+        variant: String,
+    },
     NonExhaustiveMatch(String),
     NotResultShaped(String),
 }
@@ -105,26 +124,32 @@ impl TypeChecker {
             self.check_function_body(f, &mut errors);
         }
 
-        if errors.is_empty() { Ok(()) } else { Err(errors) }
-      }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
 
-      fn resolve_type(&self, name: &str) -> Option<Type> {
-            match name {
-                  "Int" => Some(Type::Int),
-                  "Bool" => Some(Type::Bool),
-                  "String" => Some(Type::String),
-                  "Unit" => Some(Type::Unit),
-                  other if self.struct_names.contains(other) => Some(Type::Struct(other.to_string())),
-                  other if self.enum_names.contains(other) => Some(Type::Enum(other.to_string())),
-                  _ => None,
-            }
-      }
+    fn resolve_type(&self, name: &str) -> Option<Type> {
+        match name {
+            "Int" => Some(Type::Int),
+            "Bool" => Some(Type::Bool),
+            "String" => Some(Type::String),
+            "Unit" => Some(Type::Unit),
+            other if self.struct_names.contains(other) => Some(Type::Struct(other.to_string())),
+            other if self.enum_names.contains(other) => Some(Type::Enum(other.to_string())),
+            _ => None,
+        }
+    }
 
     fn collect_struct_fields(&mut self, s: &StructDecl, errors: &mut Vec<TypeError>) {
         let mut fields = HashMap::new();
         for field in &s.fields {
             match self.resolve_type(&field.type_name) {
-                Some(t) => { fields.insert(field.name.clone(), t); }
+                Some(t) => {
+                    fields.insert(field.name.clone(), t);
+                }
                 None => errors.push(TypeError::UndefinedType(field.type_name.clone())),
             }
         }
@@ -161,7 +186,13 @@ impl TypeChecker {
                 Type::Unit
             }),
         };
-        self.functions.insert(f.name.clone(), FunctionSig { params, return_type });
+        self.functions.insert(
+            f.name.clone(),
+            FunctionSig {
+                params,
+                return_type,
+            },
+        );
     }
 
     fn check_function_body(&mut self, f: &FunctionDecl, errors: &mut Vec<TypeError>) {
@@ -194,7 +225,11 @@ impl TypeChecker {
         errors: &mut Vec<TypeError>,
     ) {
         match stmt {
-            Stmt::VariableDecl { name, value, is_mutable } => {
+            Stmt::VariableDecl {
+                name,
+                value,
+                is_mutable,
+            } => {
                 if scope.contains_key(name) {
                     errors.push(TypeError::AlreadyDeclared(name.clone()));
                 }
@@ -292,34 +327,18 @@ impl TypeChecker {
             }
 
             Stmt::Match { scrutinee, arms } => {
-                if let Some(scrutinee_type) =
-                    self.eval_expr_type(scrutinee, scope, errors)
-                {
+                if let Some(scrutinee_type) = self.eval_expr_type(scrutinee, scope, errors) {
                     for arm in arms {
                         let mut arm_scope = scope.clone();
 
-                        self.check_pattern(
-                            &arm.pattern,
-                            &scrutinee_type,
-                            &mut arm_scope,
-                            errors,
-                        );
+                        self.check_pattern(&arm.pattern, &scrutinee_type, &mut arm_scope, errors);
 
                         for s in &arm.body {
-                            self.check_stmt(
-                                s,
-                                &mut arm_scope,
-                                return_type,
-                                errors,
-                            );
+                            self.check_stmt(s, &mut arm_scope, return_type, errors);
                         }
                     }
 
-                    self.check_exhaustiveness(
-                        &scrutinee_type,
-                        arms,
-                        errors,
-                    );
+                    self.check_exhaustiveness(&scrutinee_type, arms, errors);
                 }
             }
 
@@ -342,7 +361,7 @@ impl TypeChecker {
         }
     }
 
-        fn check_pattern(
+    fn check_pattern(
         &self,
         pattern: &Pattern,
         scrutinee_type: &Type,
@@ -409,13 +428,8 @@ impl TypeChecker {
                         return;
                     }
 
-                    for (binding_name, (_, field_type)) in
-                        bindings.iter().zip(fields.iter())
-                    {
-                        scope.insert(
-                            binding_name.clone(),
-                            (field_type.clone(), false),
-                        );
+                    for (binding_name, (_, field_type)) in bindings.iter().zip(fields.iter()) {
+                        scope.insert(binding_name.clone(), (field_type.clone(), false));
                     }
                 }
 
@@ -436,10 +450,7 @@ impl TypeChecker {
         arms: &[MatchArm],
         errors: &mut Vec<TypeError>,
     ) {
-        if arms
-            .iter()
-            .any(|a| matches!(a.pattern, Pattern::Wildcard))
-        {
+        if arms.iter().any(|a| matches!(a.pattern, Pattern::Wildcard)) {
             return;
         }
 
@@ -456,9 +467,10 @@ impl TypeChecker {
 
                     for variant_name in variants.keys() {
                         if !covered.contains(variant_name) {
-                            errors.push(TypeError::NonExhaustiveMatch(
-                                format!("{}::{}", name, variant_name),
-                            ));
+                            errors.push(TypeError::NonExhaustiveMatch(format!(
+                                "{}::{}",
+                                name, variant_name
+                            )));
                         }
                     }
                 }
@@ -475,16 +487,16 @@ impl TypeChecker {
 
                 if !covered.contains(&true) || !covered.contains(&false) {
                     errors.push(TypeError::NonExhaustiveMatch(
-                        "Bool (missing true, false, or a wildcard `_`)"
-                            .to_string(),
+                        "Bool (missing true, false, or a wildcard `_`)".to_string(),
                     ));
                 }
             }
 
             other => {
-                errors.push(TypeError::NonExhaustiveMatch(
-                    format!("{} requires a wildcard `_` arm", other.name()),
-                ));
+                errors.push(TypeError::NonExhaustiveMatch(format!(
+                    "{} requires a wildcard `_` arm",
+                    other.name()
+                )));
             }
         }
     }
@@ -532,14 +544,20 @@ impl TypeChecker {
             Expr::StructLiteral { name, fields } => {
                 self.check_struct_literal(name, fields, scope, errors)
             }
-            Expr::EnumLiteral { enum_name, variant, fields } => {
-                self.check_enum_literal(enum_name, variant, fields, scope, errors)
-            }
+            Expr::EnumLiteral {
+                enum_name,
+                variant,
+                fields,
+            } => self.check_enum_literal(enum_name, variant, fields, scope, errors),
             Expr::FieldAccess { object, field } => {
                 let obj_type = self.eval_expr_type(object, scope, errors)?;
                 match &obj_type {
                     Type::Struct(struct_name) => {
-                        match self.struct_fields.get(struct_name).and_then(|f| f.get(field)) {
+                        match self
+                            .struct_fields
+                            .get(struct_name)
+                            .and_then(|f| f.get(field))
+                        {
                             Some(t) => Some(t.clone()),
                             None => {
                                 errors.push(TypeError::UnknownField {
@@ -602,7 +620,8 @@ impl TypeChecker {
                     }
                 }
             }
-            Expr::Try(inner) => self.check_try(inner, scope, errors),        }
+            Expr::Try(inner) => self.check_try(inner, scope, errors),
+        }
     }
 
     fn check_binary(
@@ -619,7 +638,10 @@ impl TypeChecker {
             Add => match (&l, &r) {
                 (Type::String, Type::String) => Some(Type::String),
                 (Type::Int, Type::Int) => Some(Type::Int),
-                _ => { errors.push(binary_mismatch("+", &l, &r)); None }
+                _ => {
+                    errors.push(binary_mismatch("+", &l, &r));
+                    None
+                }
             },
             Sub | Mul | Div => {
                 if l == Type::Int && r == Type::Int {
@@ -670,11 +692,17 @@ impl TypeChecker {
 
         if callee == "len" {
             if args.len() != 1 {
-                errors.push(TypeError::WrongArgCount { callee: "len".to_string(), expected: 1, found: args.len() });
+                errors.push(TypeError::WrongArgCount {
+                    callee: "len".to_string(),
+                    expected: 1,
+                    found: args.len(),
+                });
             } else if let Some(t) = self.eval_expr_type(&args[0], scope, errors) {
                 if !matches!(t, Type::Array(_)) {
                     errors.push(TypeError::Mismatch {
-                        expected: "Array".to_string(), found: t.name(), context: "argument to `len`".to_string(),
+                        expected: "Array".to_string(),
+                        found: t.name(),
+                        context: "argument to `len`".to_string(),
                     });
                 }
             }
@@ -682,8 +710,14 @@ impl TypeChecker {
         }
         if callee == "push" {
             if args.len() != 2 {
-                errors.push(TypeError::WrongArgCount { callee: "push".to_string(), expected: 2, found: args.len() });
-                for a in args { self.eval_expr_type(a, scope, errors); }
+                errors.push(TypeError::WrongArgCount {
+                    callee: "push".to_string(),
+                    expected: 2,
+                    found: args.len(),
+                });
+                for a in args {
+                    self.eval_expr_type(a, scope, errors);
+                }
                 return None;
             }
             let arr_t = self.eval_expr_type(&args[0], scope, errors);
@@ -693,7 +727,8 @@ impl TypeChecker {
                     if let Some(val_t) = val_t {
                         if val_t != *inner {
                             errors.push(TypeError::Mismatch {
-                                expected: inner.name(), found: val_t.name(),
+                                expected: inner.name(),
+                                found: val_t.name(),
                                 context: "second argument to `push`".to_string(),
                             });
                         }
@@ -702,7 +737,8 @@ impl TypeChecker {
                 }
                 Some(other) => {
                     errors.push(TypeError::Mismatch {
-                        expected: "Array".to_string(), found: other.name(),
+                        expected: "Array".to_string(),
+                        found: other.name(),
                         context: "first argument to `push`".to_string(),
                     });
                     None
@@ -750,7 +786,7 @@ impl TypeChecker {
         fields: &[(String, Expr)],
         scope: &HashMap<String, (Type, bool)>,
         errors: &mut Vec<TypeError>,
-        ) -> Option<Type> {
+    ) -> Option<Type> {
         let Some(decl_fields) = self.struct_fields.get(name) else {
             errors.push(TypeError::UndefinedStruct(name.to_string()));
             for (_, e) in fields {
@@ -796,7 +832,7 @@ impl TypeChecker {
         }
 
         Some(Type::Struct(name.to_string()))
-      }
+    }
 
     fn check_enum_literal(
         &self,
@@ -841,7 +877,10 @@ impl TypeChecker {
                             errors.push(TypeError::Mismatch {
                                 expected: expected.name(),
                                 found: found.name(),
-                                context: format!("field `{}` of `{}::{}`", field_name, enum_name, variant),
+                                context: format!(
+                                    "field `{}` of `{}::{}`",
+                                    field_name, enum_name, variant
+                                ),
                             });
                         }
                     }
@@ -869,18 +908,22 @@ impl TypeChecker {
         let inner_type = self.eval_expr_type(inner, scope, errors)?;
         let Type::Enum(enum_name) = &inner_type else {
             errors.push(TypeError::NotResultShaped(format!(
-                "`?` requires an enum type, found {}", inner_type.name()
+                "`?` requires an enum type, found {}",
+                inner_type.name()
             )));
             return None;
         };
         let variants = self.enum_variants.get(enum_name)?;
         let ok_fields = variants.get("Ok")?;
         let err_fields = variants.get("Err")?;
-        if ok_fields.len() != 1 || ok_fields[0].0 != "value"
-            || err_fields.len() != 1 || err_fields[0].0 != "error"
+        if ok_fields.len() != 1
+            || ok_fields[0].0 != "value"
+            || err_fields.len() != 1
+            || err_fields[0].0 != "error"
         {
             errors.push(TypeError::NotResultShaped(format!(
-                "enum `{}` is not Ok/Err-shaped (need Ok(value: T), Err(error: E))", enum_name
+                "enum `{}` is not Ok/Err-shaped (need Ok(value: T), Err(error: E))",
+                enum_name
             )));
             return None;
         }
@@ -888,7 +931,8 @@ impl TypeChecker {
             errors.push(TypeError::Mismatch {
                 expected: self.current_return_type.name(),
                 found: inner_type.name(),
-                context: "`?` requires the current function to return the same Result-shaped enum".to_string(),
+                context: "`?` requires the current function to return the same Result-shaped enum"
+                    .to_string(),
             });
         }
         Some(ok_fields[0].1.clone())
@@ -906,8 +950,16 @@ fn binary_mismatch(op: &str, l: &Type, r: &Type) -> TypeError {
 fn op_symbol(op: BinaryOp) -> &'static str {
     use BinaryOp::*;
     match op {
-        Add => "+", Sub => "-", Mul => "*", Div => "/",
-        Eq => "==", NotEq => "!=", Lt => "<", Gt => ">", Le => "<=", Ge => ">=",
+        Add => "+",
+        Sub => "-",
+        Mul => "*",
+        Div => "/",
+        Eq => "==",
+        NotEq => "!=",
+        Lt => "<",
+        Gt => ">",
+        Le => "<=",
+        Ge => ">=",
     }
 }
 
@@ -953,7 +1005,9 @@ mod tests {
     fn catches_wrong_arg_count() {
         let source = "fn add(a: Int, b: Int) -> Int { return a + b }\nfn main() { add(1) }";
         let err = check(source).unwrap_err();
-        assert!(err.iter().any(|e| matches!(e, TypeError::WrongArgCount { .. })));
+        assert!(err
+            .iter()
+            .any(|e| matches!(e, TypeError::WrongArgCount { .. })));
     }
 
     #[test]
@@ -973,7 +1027,9 @@ mod tests {
     fn catches_missing_struct_field() {
         let source = "struct P { x: Int, y: Int }\nfn main() { p := P { x: 1 } }";
         let err = check(source).unwrap_err();
-        assert!(err.iter().any(|e| matches!(e, TypeError::MissingField { .. })));
+        assert!(err
+            .iter()
+            .any(|e| matches!(e, TypeError::MissingField { .. })));
     }
 
     #[test]
@@ -1010,7 +1066,9 @@ mod tests {
     fn catches_undefined_variant() {
         let source = "enum Status { Pending }\nfn main() { s := Status::Ghost }";
         let err = check(source).unwrap_err();
-        assert!(err.iter().any(|e| matches!(e, TypeError::UndefinedVariant { .. })));
+        assert!(err
+            .iter()
+            .any(|e| matches!(e, TypeError::UndefinedVariant { .. })));
     }
 
     #[test]
@@ -1048,7 +1106,9 @@ mod tests {
             }
         "#;
         let err = check(source).unwrap_err();
-        assert!(err.iter().any(|e| matches!(e, TypeError::NonExhaustiveMatch(_))));
+        assert!(err
+            .iter()
+            .any(|e| matches!(e, TypeError::NonExhaustiveMatch(_))));
     }
 
     #[test]
@@ -1070,7 +1130,9 @@ mod tests {
     fn catches_int_match_without_wildcard() {
         let source = "fn main() { x := 5\nmatch x { 1 => { print(\"one\") } } }";
         let err = check(source).unwrap_err();
-        assert!(err.iter().any(|e| matches!(e, TypeError::NonExhaustiveMatch(_))));
+        assert!(err
+            .iter()
+            .any(|e| matches!(e, TypeError::NonExhaustiveMatch(_))));
     }
 
     #[test]
@@ -1089,7 +1151,8 @@ mod tests {
 
     #[test]
     fn catches_pattern_type_mismatch() {
-        let source = "fn main() { x := 5\nmatch x { true => { print(\"t\") } _ => { print(\"o\") } } }";
+        let source =
+            "fn main() { x := 5\nmatch x { true => { print(\"t\") } _ => { print(\"o\") } } }";
         let err = check(source).unwrap_err();
         assert!(err.iter().any(|e| matches!(e, TypeError::Mismatch { .. })));
     }
@@ -1150,7 +1213,9 @@ mod tests {
     fn catches_try_on_non_enum() {
         let source = "fn f() -> Int { x := 5?\nreturn x }\nfn main() {}";
         let err = check(source).unwrap_err();
-        assert!(err.iter().any(|e| matches!(e, TypeError::NotResultShaped(_))));
+        assert!(err
+            .iter()
+            .any(|e| matches!(e, TypeError::NotResultShaped(_))));
     }
 
     #[test]

@@ -44,7 +44,11 @@ impl Value {
                 let parts: Vec<String> = items.iter().map(|v| v.display()).collect();
                 format!("[{}]", parts.join(", "))
             }
-            Value::Enum { enum_name, variant, fields } => {
+            Value::Enum {
+                enum_name,
+                variant,
+                fields,
+            } => {
                 if fields.is_empty() {
                     format!("{}::{}", enum_name, variant)
                 } else {
