@@ -1,0 +1,6 @@
+fn main() {
+    big := 3000000000
+    print(big * 2)
+    print(10 / 2)
+    print(10 / 0)
+}
