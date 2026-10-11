@@ -8,7 +8,11 @@ use crate::value::Value;
 pub enum RuntimeError {
     UndefinedVariable(String),
     UndefinedFunction(String),
-    WrongArgCount { callee: String, expected: usize, found: usize },
+    WrongArgCount {
+        callee: String,
+        expected: usize,
+        found: usize,
+    },
     NoMainFunction,
     TypeError(String),
     DivisionByZero,
@@ -94,14 +98,21 @@ impl<'a> Interpreter<'a> {
 
     fn exec_stmt(&mut self, stmt: &HStmt) -> Result<ControlFlow, RuntimeError> {
         match stmt {
-            HStmt::VariableDecl { name, value, is_mutable } => {
+            HStmt::VariableDecl {
+                name,
+                value,
+                is_mutable,
+            } => {
                 if self.env.contains_key(name) {
                     return Err(RuntimeError::AlreadyDeclared(name.clone()));
                 }
                 let v = self.eval_expr(value)?;
                 self.env.insert(
                     name.clone(),
-                    Binding { value: v, is_mutable: *is_mutable },
+                    Binding {
+                        value: v,
+                        is_mutable: *is_mutable,
+                    },
                 );
                 Ok(ControlFlow::Normal)
             }
@@ -122,7 +133,8 @@ impl<'a> Interpreter<'a> {
                 let idx_val = self.eval_expr(index)?;
                 let Value::Int(i) = idx_val else {
                     return Err(RuntimeError::TypeError(format!(
-                        "array index must be Int, found {}", idx_val.type_name()
+                        "array index must be Int, found {}",
+                        idx_val.type_name()
                     )));
                 };
                 let new_val = self.eval_expr(value)?;
@@ -149,7 +161,11 @@ impl<'a> Interpreter<'a> {
                 self.eval_expr(expr)?;
                 Ok(ControlFlow::Normal)
             }
-            HStmt::If { condition, then_branch, else_branch } => {
+            HStmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
                 if self.eval_condition(condition)? {
                     self.exec_block(then_branch)
                 } else if let Some(else_stmts) = else_branch {
@@ -211,18 +227,20 @@ impl<'a> Interpreter<'a> {
 
             HExpr::FieldAccess { object, field } => match self.eval_expr(object)? {
                 Value::Struct { name, fields } => fields.get(field).cloned().ok_or_else(|| {
-                    RuntimeError::StructError(format!(
-                        "struct `{}` has no field `{}`", name, field
-                    ))
+                    RuntimeError::StructError(format!("struct `{}` has no field `{}`", name, field))
                 }),
                 other => Err(RuntimeError::TypeError(format!(
-                    "cannot access field `{}` on {}", field, other.type_name()
+                    "cannot access field `{}` on {}",
+                    field,
+                    other.type_name()
                 ))),
             },
 
-            HExpr::EnumLiteral { enum_name, variant, fields } => {
-                self.eval_enum_literal(enum_name, variant, fields)
-            }
+            HExpr::EnumLiteral {
+                enum_name,
+                variant,
+                fields,
+            } => self.eval_enum_literal(enum_name, variant, fields),
 
             HExpr::ArrayLiteral(elements) => {
                 let mut values = Vec::with_capacity(elements.len());
@@ -236,13 +254,15 @@ impl<'a> Interpreter<'a> {
                 let idx_val = self.eval_expr(index)?;
                 let Value::Int(i) = idx_val else {
                     return Err(RuntimeError::TypeError(format!(
-                        "array index must be Int, found {}", idx_val.type_name()
+                        "array index must be Int, found {}",
+                        idx_val.type_name()
                     )));
                 };
                 let arr_val = self.eval_expr(array)?;
                 let Value::Array(items) = arr_val else {
                     return Err(RuntimeError::TypeError(format!(
-                        "cannot index into {}", arr_val.type_name()
+                        "cannot index into {}",
+                        arr_val.type_name()
                     )));
                 };
                 if i < 0 || i as usize >= items.len() {
@@ -253,7 +273,12 @@ impl<'a> Interpreter<'a> {
 
             HExpr::Try(inner) => {
                 let value = self.eval_expr(inner)?;
-                let Value::Enum { enum_name, variant, mut fields } = value else {
+                let Value::Enum {
+                    enum_name,
+                    variant,
+                    mut fields,
+                } = value
+                else {
                     return Err(RuntimeError::NotResultShaped(
                         "? used on a non-enum value".to_string(),
                     ));
@@ -261,39 +286,53 @@ impl<'a> Interpreter<'a> {
                 match variant.as_str() {
                     "Ok" => fields.remove("value").ok_or_else(|| {
                         RuntimeError::NotResultShaped(format!(
-                            "enum `{}` variant `Ok` has no `value` field", enum_name
+                            "enum `{}` variant `Ok` has no `value` field",
+                            enum_name
                         ))
                     }),
                     "Err" => Err(RuntimeError::TryPropagate(Value::Enum {
-                        enum_name, variant, fields,
+                        enum_name,
+                        variant,
+                        fields,
                     })),
                     other => Err(RuntimeError::NotResultShaped(format!(
-                        "`?` requires an Ok/Err-shaped enum, found variant `{}`", other
+                        "`?` requires an Ok/Err-shaped enum, found variant `{}`",
+                        other
                     ))),
                 }
             }
 
-            HExpr::IsVariant { scrutinee, enum_name, variant } => {
-                match self.eval_expr(scrutinee)? {
-                    Value::Enum { enum_name: vn, variant: vv, .. } => {
-                        Ok(Value::Bool(&vn == enum_name && &vv == variant))
-                    }
-                    _ => Ok(Value::Bool(false)),
-                }
-            }
+            HExpr::IsVariant {
+                scrutinee,
+                enum_name,
+                variant,
+            } => match self.eval_expr(scrutinee)? {
+                Value::Enum {
+                    enum_name: vn,
+                    variant: vv,
+                    ..
+                } => Ok(Value::Bool(&vn == enum_name && &vv == variant)),
+                _ => Ok(Value::Bool(false)),
+            },
 
-            HExpr::VariantField { scrutinee, enum_name, variant, field } => {
-                match self.eval_expr(scrutinee)? {
-                    Value::Enum { fields, .. } => fields.get(field).cloned().ok_or_else(|| {
-                        RuntimeError::EnumError(format!(
-                            "variant `{}::{}` has no field `{}`", enum_name, variant, field
-                        ))
-                    }),
-                    other => Err(RuntimeError::TypeError(format!(
-                        "expected enum `{}`, found {}", enum_name, other.type_name()
-                    ))),
-                }
-            }
+            HExpr::VariantField {
+                scrutinee,
+                enum_name,
+                variant,
+                field,
+            } => match self.eval_expr(scrutinee)? {
+                Value::Enum { fields, .. } => fields.get(field).cloned().ok_or_else(|| {
+                    RuntimeError::EnumError(format!(
+                        "variant `{}::{}` has no field `{}`",
+                        enum_name, variant, field
+                    ))
+                }),
+                other => Err(RuntimeError::TypeError(format!(
+                    "expected enum `{}`, found {}",
+                    enum_name,
+                    other.type_name()
+                ))),
+            },
         }
     }
 
@@ -303,24 +342,31 @@ impl<'a> Interpreter<'a> {
         fields: &[(String, HExpr)],
     ) -> Result<Value, RuntimeError> {
         let Some(decl) = self.structs.get(name).cloned() else {
-            return Err(RuntimeError::StructError(format!("undefined struct `{}`", name)));
+            return Err(RuntimeError::StructError(format!(
+                "undefined struct `{}`",
+                name
+            )));
         };
         if fields.len() != decl.fields.len() {
             return Err(RuntimeError::StructError(format!(
                 "struct `{}` expects {} field(s), found {}",
-                name, decl.fields.len(), fields.len()
+                name,
+                decl.fields.len(),
+                fields.len()
             )));
         }
         let mut values: HashMap<String, Value> = HashMap::new();
         for (field_name, field_expr) in fields {
             if !decl.fields.iter().any(|f| &f.name == field_name) {
                 return Err(RuntimeError::StructError(format!(
-                    "struct `{}` has no field `{}`", name, field_name
+                    "struct `{}` has no field `{}`",
+                    name, field_name
                 )));
             }
             if values.contains_key(field_name) {
                 return Err(RuntimeError::StructError(format!(
-                    "field `{}` specified more than once", field_name
+                    "field `{}` specified more than once",
+                    field_name
                 )));
             }
             let value = self.eval_expr(field_expr)?;
@@ -329,11 +375,15 @@ impl<'a> Interpreter<'a> {
         for decl_field in &decl.fields {
             if !values.contains_key(&decl_field.name) {
                 return Err(RuntimeError::StructError(format!(
-                    "missing field `{}` in struct `{}`", decl_field.name, name
+                    "missing field `{}` in struct `{}`",
+                    decl_field.name, name
                 )));
             }
         }
-        Ok(Value::Struct { name: name.to_string(), fields: values })
+        Ok(Value::Struct {
+            name: name.to_string(),
+            fields: values,
+        })
     }
 
     fn eval_enum_literal(
@@ -343,29 +393,38 @@ impl<'a> Interpreter<'a> {
         fields: &[(String, HExpr)],
     ) -> Result<Value, RuntimeError> {
         let Some(decl) = self.enums.get(enum_name).cloned() else {
-            return Err(RuntimeError::EnumError(format!("undefined enum `{}`", enum_name)));
+            return Err(RuntimeError::EnumError(format!(
+                "undefined enum `{}`",
+                enum_name
+            )));
         };
         let Some(variant_decl) = decl.variants.iter().find(|v| v.name == variant) else {
             return Err(RuntimeError::EnumError(format!(
-                "enum `{}` has no variant `{}`", enum_name, variant
+                "enum `{}` has no variant `{}`",
+                enum_name, variant
             )));
         };
         if fields.len() != variant_decl.fields.len() {
             return Err(RuntimeError::EnumError(format!(
                 "variant `{}::{}` expects {} field(s), found {}",
-                enum_name, variant, variant_decl.fields.len(), fields.len()
+                enum_name,
+                variant,
+                variant_decl.fields.len(),
+                fields.len()
             )));
         }
         let mut values: HashMap<String, Value> = HashMap::new();
         for (field_name, field_expr) in fields {
             if !variant_decl.fields.iter().any(|f| &f.name == field_name) {
                 return Err(RuntimeError::EnumError(format!(
-                    "variant `{}::{}` has no field `{}`", enum_name, variant, field_name
+                    "variant `{}::{}` has no field `{}`",
+                    enum_name, variant, field_name
                 )));
             }
             if values.contains_key(field_name) {
                 return Err(RuntimeError::EnumError(format!(
-                    "field `{}` specified more than once", field_name
+                    "field `{}` specified more than once",
+                    field_name
                 )));
             }
             let value = self.eval_expr(field_expr)?;
@@ -374,11 +433,16 @@ impl<'a> Interpreter<'a> {
         for f in &variant_decl.fields {
             if !values.contains_key(&f.name) {
                 return Err(RuntimeError::EnumError(format!(
-                    "missing field `{}` in variant `{}::{}`", f.name, enum_name, variant
+                    "missing field `{}` in variant `{}::{}`",
+                    f.name, enum_name, variant
                 )));
             }
         }
-        Ok(Value::Enum { enum_name: enum_name.to_string(), variant: variant.to_string(), fields: values })
+        Ok(Value::Enum {
+            enum_name: enum_name.to_string(),
+            variant: variant.to_string(),
+            fields: values,
+        })
     }
 
     fn eval_binary(&self, op: BinaryOp, l: Value, r: Value) -> Result<Value, RuntimeError> {
@@ -392,7 +456,11 @@ impl<'a> Interpreter<'a> {
             Sub => int_op(l, r, "-", |a, b| Ok(Value::Int(a - b))),
             Mul => int_op(l, r, "*", |a, b| Ok(Value::Int(a * b))),
             Div => int_op(l, r, "/", |a, b| {
-                if b == 0 { Err(RuntimeError::DivisionByZero) } else { Ok(Value::Int(a / b)) }
+                if b == 0 {
+                    Err(RuntimeError::DivisionByZero)
+                } else {
+                    Ok(Value::Int(a / b))
+                }
             }),
             Eq => Ok(Value::Bool(l == r)),
             NotEq => Ok(Value::Bool(l != r)),
@@ -406,7 +474,11 @@ impl<'a> Interpreter<'a> {
     fn call_function(&mut self, callee: &str, args: &[HExpr]) -> Result<Value, RuntimeError> {
         if callee == "print" {
             if args.len() != 1 {
-                return Err(RuntimeError::WrongArgCount { callee: "print".to_string(), expected: 1, found: args.len() });
+                return Err(RuntimeError::WrongArgCount {
+                    callee: "print".to_string(),
+                    expected: 1,
+                    found: args.len(),
+                });
             }
             let value = self.eval_expr(&args[0])?;
             (self.print_sink)(&value.display());
@@ -414,7 +486,11 @@ impl<'a> Interpreter<'a> {
         }
         if callee == "len" {
             if args.len() != 1 {
-                return Err(RuntimeError::WrongArgCount { callee: "len".to_string(), expected: 1, found: args.len() });
+                return Err(RuntimeError::WrongArgCount {
+                    callee: "len".to_string(),
+                    expected: 1,
+                    found: args.len(),
+                });
             }
             let Value::Array(items) = self.eval_expr(&args[0])? else {
                 return Err(RuntimeError::TypeError("len expects an Array".to_string()));
@@ -423,10 +499,16 @@ impl<'a> Interpreter<'a> {
         }
         if callee == "push" {
             if args.len() != 2 {
-                return Err(RuntimeError::WrongArgCount { callee: "push".to_string(), expected: 2, found: args.len() });
+                return Err(RuntimeError::WrongArgCount {
+                    callee: "push".to_string(),
+                    expected: 2,
+                    found: args.len(),
+                });
             }
             let Value::Array(mut items) = self.eval_expr(&args[0])? else {
-                return Err(RuntimeError::TypeError("push expects an Array as its first argument".to_string()));
+                return Err(RuntimeError::TypeError(
+                    "push expects an Array as its first argument".to_string(),
+                ));
             };
             let new_item = self.eval_expr(&args[1])?;
             items.push(new_item);
@@ -446,7 +528,9 @@ impl<'a> Interpreter<'a> {
     ) -> Result<Value, RuntimeError> {
         if args.len() != func.params.len() {
             return Err(RuntimeError::WrongArgCount {
-                callee: func.name.clone(), expected: func.params.len(), found: args.len(),
+                callee: func.name.clone(),
+                expected: func.params.len(),
+                found: args.len(),
             });
         }
         let mut arg_values = Vec::with_capacity(args.len());
@@ -455,7 +539,13 @@ impl<'a> Interpreter<'a> {
         }
         let mut call_env = HashMap::new();
         for (param, value) in func.params.iter().zip(arg_values) {
-            call_env.insert(param.name.clone(), Binding { value, is_mutable: false });
+            call_env.insert(
+                param.name.clone(),
+                Binding {
+                    value,
+                    is_mutable: false,
+                },
+            );
         }
         let caller_env = std::mem::replace(&mut self.env, call_env);
         let result = self.exec_block(&func.body);
@@ -469,7 +559,12 @@ impl<'a> Interpreter<'a> {
 }
 
 fn type_error(op: &str, a: &Value, b: &Value) -> RuntimeError {
-    RuntimeError::TypeError(format!("cannot apply `{}` to {} and {}", op, a.type_name(), b.type_name()))
+    RuntimeError::TypeError(format!(
+        "cannot apply `{}` to {} and {}",
+        op,
+        a.type_name(),
+        b.type_name()
+    ))
 }
 
 fn int_op(
@@ -512,17 +607,26 @@ mod tests {
                 print("Hello, " + name)
             }
         "#;
-        assert_eq!(run_and_capture(source).unwrap(), vec!["Hello, World".to_string()]);
+        assert_eq!(
+            run_and_capture(source).unwrap(),
+            vec!["Hello, World".to_string()]
+        );
     }
 
     #[test]
     fn runs_arithmetic() {
-        assert_eq!(run_and_capture("fn main() { x := 2 + 3 * 4\nprint(x) }").unwrap(), vec!["14".to_string()]);
+        assert_eq!(
+            run_and_capture("fn main() { x := 2 + 3 * 4\nprint(x) }").unwrap(),
+            vec!["14".to_string()]
+        );
     }
 
     #[test]
     fn runs_grouping_overrides_precedence() {
-        assert_eq!(run_and_capture("fn main() { x := (2 + 3) * 4\nprint(x) }").unwrap(), vec!["20".to_string()]);
+        assert_eq!(
+            run_and_capture("fn main() { x := (2 + 3) * 4\nprint(x) }").unwrap(),
+            vec!["20".to_string()]
+        );
     }
 
     #[test]
@@ -582,7 +686,10 @@ mod tests {
 
     #[test]
     fn reports_division_by_zero() {
-        assert_eq!(run_and_capture("fn main() { x := 5 / 0 }").unwrap_err(), RuntimeError::DivisionByZero);
+        assert_eq!(
+            run_and_capture("fn main() { x := 5 / 0 }").unwrap_err(),
+            RuntimeError::DivisionByZero
+        );
     }
 
     #[test]
@@ -641,7 +748,10 @@ mod tests {
                 print(p.y)
             }
         "#;
-        assert_eq!(run_and_capture(source).unwrap(), vec!["3".to_string(), "4".to_string()]);
+        assert_eq!(
+            run_and_capture(source).unwrap(),
+            vec!["3".to_string(), "4".to_string()]
+        );
     }
 
     #[test]
@@ -656,7 +766,10 @@ mod tests {
                 }
             }
         "#;
-        assert_eq!(run_and_capture(source).unwrap(), vec!["timeout".to_string()]);
+        assert_eq!(
+            run_and_capture(source).unwrap(),
+            vec!["timeout".to_string()]
+        );
     }
 
     #[test]
@@ -673,7 +786,10 @@ mod tests {
 
     #[test]
     fn indexes_array() {
-        assert_eq!(run_and_capture("fn main() { a := [10, 20, 30]\nprint(a[1]) }").unwrap(), vec!["20".to_string()]);
+        assert_eq!(
+            run_and_capture("fn main() { a := [10, 20, 30]\nprint(a[1]) }").unwrap(),
+            vec!["20".to_string()]
+        );
     }
 
     #[test]
@@ -686,7 +802,10 @@ mod tests {
                 print(len(b))
             }
         "#;
-        assert_eq!(run_and_capture(source).unwrap(), vec!["3".to_string(), "4".to_string()]);
+        assert_eq!(
+            run_and_capture(source).unwrap(),
+            vec!["3".to_string(), "4".to_string()]
+        );
     }
 
     #[test]

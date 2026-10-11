@@ -8,10 +8,21 @@ pub enum LoadError {
     Io(String),
     Lex(String),
     Parse(String),
-    ModuleNameMismatch { file: String, declared: String },
+    ModuleNameMismatch {
+        file: String,
+        declared: String,
+    },
     CyclicImport(String),
-    DuplicateDeclaration { name: String, module_a: String, module_b: String },
-    SymbolNotAccessible { name: String, from_module: String, origin_module: String },
+    DuplicateDeclaration {
+        name: String,
+        module_a: String,
+        module_b: String,
+    },
+    SymbolNotAccessible {
+        name: String,
+        from_module: String,
+        origin_module: String,
+    },
 }
 
 pub trait ModuleSource {
@@ -51,7 +62,13 @@ pub fn load_program(entry: &str, source: &dyn ModuleSource) -> Result<Program, L
         functions.extend(m.functions);
     }
 
-    Ok(Program { module_name: None, imports: Vec::new(), structs, enums, functions })
+    Ok(Program {
+        module_name: None,
+        imports: Vec::new(),
+        structs,
+        enums,
+        functions,
+    })
 }
 
 fn load_module(
@@ -105,7 +122,10 @@ fn load_module(
 fn check_duplicates(visited: &HashMap<String, LoadedModule>) -> Result<(), LoadError> {
     let mut seen: HashMap<String, String> = HashMap::new();
     for m in visited.values() {
-        let names: Vec<&str> = m.structs.iter().map(|s| s.name.as_str())
+        let names: Vec<&str> = m
+            .structs
+            .iter()
+            .map(|s| s.name.as_str())
             .chain(m.enums.iter().map(|e| e.name.as_str()))
             .chain(m.functions.iter().map(|f| f.name.as_str()))
             .collect();
@@ -136,7 +156,9 @@ impl<'a> Checker<'a> {
         current: &LoadedModule,
         origin: &HashMap<String, (String, bool)>,
     ) -> Result<(), LoadError> {
-        let Some((origin_module, exported)) = origin.get(name) else { return Ok(()) };
+        let Some((origin_module, exported)) = origin.get(name) else {
+            return Ok(());
+        };
         if origin_module == &current.name {
             return Ok(());
         }
@@ -166,22 +188,32 @@ impl<'a> Checker<'a> {
             }
             Call { callee, args } => {
                 self.check_accessible(callee, current, self.fn_origin)?;
-                for a in args { self.check_expr(a, current)?; }
+                for a in args {
+                    self.check_expr(a, current)?;
+                }
                 Ok(())
             }
             StructLiteral { name, fields } => {
                 self.check_accessible(name, current, self.struct_origin)?;
-                for (_, e) in fields { self.check_expr(e, current)?; }
+                for (_, e) in fields {
+                    self.check_expr(e, current)?;
+                }
                 Ok(())
             }
             FieldAccess { object, .. } => self.check_expr(object, current),
-            EnumLiteral { enum_name, fields, .. } => {
+            EnumLiteral {
+                enum_name, fields, ..
+            } => {
                 self.check_accessible(enum_name, current, self.enum_origin)?;
-                for (_, e) in fields { self.check_expr(e, current)?; }
+                for (_, e) in fields {
+                    self.check_expr(e, current)?;
+                }
                 Ok(())
             }
             ArrayLiteral(elements) => {
-                for e in elements { self.check_expr(e, current)?; }
+                for e in elements {
+                    self.check_expr(e, current)?;
+                }
                 Ok(())
             }
             Index { array, index } => {
@@ -202,21 +234,33 @@ impl<'a> Checker<'a> {
                 self.check_expr(value, current)
             }
             Expr(e) => self.check_expr(e, current),
-            If { condition, then_branch, else_branch } => {
+            If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
                 self.check_expr(condition, current)?;
-                for s in then_branch { self.check_stmt(s, current)?; }
+                for s in then_branch {
+                    self.check_stmt(s, current)?;
+                }
                 if let Some(else_stmts) = else_branch {
-                    for s in else_stmts { self.check_stmt(s, current)?; }
+                    for s in else_stmts {
+                        self.check_stmt(s, current)?;
+                    }
                 }
                 Ok(())
             }
             While { condition, body } => {
                 self.check_expr(condition, current)?;
-                for s in body { self.check_stmt(s, current)?; }
+                for s in body {
+                    self.check_stmt(s, current)?;
+                }
                 Ok(())
             }
             Return(expr) => {
-                if let Some(e) = expr { self.check_expr(e, current)?; }
+                if let Some(e) = expr {
+                    self.check_expr(e, current)?;
+                }
                 Ok(())
             }
             Match { scrutinee, arms } => {
@@ -225,7 +269,9 @@ impl<'a> Checker<'a> {
                     if let kairo_ast::Pattern::EnumVariant { enum_name, .. } = &arm.pattern {
                         self.check_accessible(enum_name, current, self.enum_origin)?;
                     }
-                    for s in &arm.body { self.check_stmt(s, current)?; }
+                    for s in &arm.body {
+                        self.check_stmt(s, current)?;
+                    }
                 }
                 Ok(())
             }
@@ -238,24 +284,44 @@ fn check_visibility(visited: &HashMap<String, LoadedModule>) -> Result<(), LoadE
     let mut enum_origin: HashMap<String, (String, bool)> = HashMap::new();
     let mut fn_origin: HashMap<String, (String, bool)> = HashMap::new();
     for m in visited.values() {
-        for s in &m.structs { struct_origin.insert(s.name.clone(), (m.name.clone(), s.is_exported)); }
-        for e in &m.enums { enum_origin.insert(e.name.clone(), (m.name.clone(), e.is_exported)); }
-        for f in &m.functions { fn_origin.insert(f.name.clone(), (m.name.clone(), f.is_exported)); }
+        for s in &m.structs {
+            struct_origin.insert(s.name.clone(), (m.name.clone(), s.is_exported));
+        }
+        for e in &m.enums {
+            enum_origin.insert(e.name.clone(), (m.name.clone(), e.is_exported));
+        }
+        for f in &m.functions {
+            fn_origin.insert(f.name.clone(), (m.name.clone(), f.is_exported));
+        }
     }
 
-    let checker = Checker { fn_origin: &fn_origin, struct_origin: &struct_origin, enum_origin: &enum_origin };
+    let checker = Checker {
+        fn_origin: &fn_origin,
+        struct_origin: &struct_origin,
+        enum_origin: &enum_origin,
+    };
     for m in visited.values() {
         for f in &m.functions {
-            if let Some(rt) = &f.return_type { checker.check_type_name(rt, m)?; }
-            for p in &f.params { checker.check_type_name(&p.type_name, m)?; }
-            for stmt in &f.body { checker.check_stmt(stmt, m)?; }
+            if let Some(rt) = &f.return_type {
+                checker.check_type_name(rt, m)?;
+            }
+            for p in &f.params {
+                checker.check_type_name(&p.type_name, m)?;
+            }
+            for stmt in &f.body {
+                checker.check_stmt(stmt, m)?;
+            }
         }
         for s in &m.structs {
-            for field in &s.fields { checker.check_type_name(&field.type_name, m)?; }
+            for field in &s.fields {
+                checker.check_type_name(&field.type_name, m)?;
+            }
         }
         for e in &m.enums {
             for v in &e.variants {
-                for field in &v.fields { checker.check_type_name(&field.type_name, m)?; }
+                for field in &v.fields {
+                    checker.check_type_name(&field.type_name, m)?;
+                }
             }
         }
     }
@@ -267,7 +333,10 @@ mod tests {
     use super::*;
 
     fn sources(pairs: &[(&str, &str)]) -> HashMap<String, String> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     #[test]
@@ -311,8 +380,14 @@ mod tests {
     #[test]
     fn blocks_use_of_non_exported_symbol() {
         let src = sources(&[
-            ("geometry", "module geometry\nfn helper() -> Int { return 1 }"),
-            ("main", "module main\nimport geometry\nfn main() { print(helper()) }"),
+            (
+                "geometry",
+                "module geometry\nfn helper() -> Int { return 1 }",
+            ),
+            (
+                "main",
+                "module main\nimport geometry\nfn main() { print(helper()) }",
+            ),
         ]);
         let err = load_program("main", &src).unwrap_err();
         assert!(matches!(err, LoadError::SymbolNotAccessible { .. }));
@@ -322,7 +397,10 @@ mod tests {
     fn blocks_use_of_symbol_without_direct_import() {
         let src = sources(&[
             ("a", "module a\nexport fn foo() -> Int { return 1 }"),
-            ("b", "module b\nimport a\nfn useFoo() -> Int { return foo() }"),
+            (
+                "b",
+                "module b\nimport a\nfn useFoo() -> Int { return foo() }",
+            ),
             ("main", "module main\nimport b\nfn main() { print(foo()) }"),
         ]);
         let err = load_program("main", &src).unwrap_err();

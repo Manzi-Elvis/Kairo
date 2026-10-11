@@ -24,28 +24,28 @@ pub enum TokenKind {
     IntLiteral(i64),
 
     // Punctuation
-    LParen,   // (
-    RParen,   // )
-    LBrace,   // {
-    RBrace,   // }
-    Comma,    // ,
-    Colon,    // :
+    LParen,     // (
+    RParen,     // )
+    LBrace,     // {
+    RBrace,     // }
+    Comma,      // ,
+    Colon,      // :
     ColonColon, // ::
-    Dot,      // .
-    Arrow,    // ->
-    ColonEq,  // :=
+    Dot,        // .
+    Arrow,      // ->
+    ColonEq,    // :=
     FatArrow,   // =>
-    Eq,       // =
-    Plus,     // +
-    Minus,    // -
-    Star,     // *
-    Slash,    // /
-    EqEq,     // ==
-    NotEq,    // !=
-    Lt,       // 
-    Gt,       // >
-    LtEq,     // <=
-    GtEq,     // >=
+    Eq,         // =
+    Plus,       // +
+    Minus,      // -
+    Star,       // *
+    Slash,      // /
+    EqEq,       // ==
+    NotEq,      // !=
+    Lt,         //
+    Gt,         // >
+    LtEq,       // <=
+    GtEq,       // >=
     Eof,
     LBracket, // [
     RBracket, // ]

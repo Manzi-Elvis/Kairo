@@ -1,5 +1,8 @@
+use kairo_ast::{
+    BinaryOp, EnumDecl, EnumVariant, Expr, FunctionDecl, MatchArm, Param, Pattern, Program, Stmt,
+    StructDecl,
+};
 use kairo_lexer::{Span, Token, TokenKind};
-use kairo_ast::{BinaryOp, EnumDecl, EnumVariant, Expr, FunctionDecl, MatchArm, Param, Pattern, Program, Stmt, StructDecl,};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParseError {
@@ -66,7 +69,13 @@ impl Parser {
                 functions.push(self.parse_function_decl(is_exported)?);
             }
         }
-        Ok(Program { module_name, imports, structs, enums, functions })
+        Ok(Program {
+            module_name,
+            imports,
+            structs,
+            enums,
+            functions,
+        })
     }
 
     fn parse_struct_decl(&mut self, is_exported: bool) -> Result<StructDecl, ParseError> {
@@ -75,7 +84,11 @@ impl Parser {
         self.expect(&TokenKind::LBrace, "{")?;
         let fields = self.parse_struct_fields()?;
         self.expect(&TokenKind::RBrace, "}")?;
-        Ok(StructDecl { name, fields, is_exported })
+        Ok(StructDecl {
+            name,
+            fields,
+            is_exported,
+        })
     }
 
     fn parse_struct_fields(&mut self) -> Result<Vec<Param>, ParseError> {
@@ -100,12 +113,18 @@ impl Parser {
             variants.push(self.parse_enum_variant()?);
             while self.check(&TokenKind::Comma) {
                 self.advance();
-                if self.check(&TokenKind::RBrace) { break; }
+                if self.check(&TokenKind::RBrace) {
+                    break;
+                }
                 variants.push(self.parse_enum_variant()?);
             }
         }
         self.expect(&TokenKind::RBrace, "}")?;
-        Ok(EnumDecl { name, variants, is_exported })
+        Ok(EnumDecl {
+            name,
+            variants,
+            is_exported,
+        })
     }
 
     fn parse_enum_variant(&mut self) -> Result<EnumVariant, ParseError> {
@@ -149,7 +168,13 @@ impl Parser {
         self.expect(&TokenKind::LBrace, "{")?;
         let body = self.parse_block_stmts()?;
         self.expect(&TokenKind::RBrace, "}")?;
-        Ok(FunctionDecl { name, params, return_type, body, is_exported })
+        Ok(FunctionDecl {
+            name,
+            params,
+            return_type,
+            body,
+            is_exported,
+        })
     }
 
     fn parse_params(&mut self) -> Result<Vec<Param>, ParseError> {
@@ -223,7 +248,11 @@ impl Parser {
                         let value = self.parse_expr()?;
                         if let Expr::Index { array, index } = expr {
                             if let Expr::Identifier(name) = *array {
-                                return Ok(Stmt::IndexAssign { name, index: *index, value });
+                                return Ok(Stmt::IndexAssign {
+                                    name,
+                                    index: *index,
+                                    value,
+                                });
                             }
                         }
                         return Err(ParseError::UnexpectedToken {
@@ -364,7 +393,11 @@ impl Parser {
                 } else {
                     Vec::new()
                 };
-                Ok(Pattern::EnumVariant { enum_name, variant, bindings })
+                Ok(Pattern::EnumVariant {
+                    enum_name,
+                    variant,
+                    bindings,
+                })
             }
             other => Err(ParseError::UnexpectedToken {
                 expected: "pattern".to_string(),
@@ -401,7 +434,11 @@ impl Parser {
             };
             self.advance();
             let right = self.parse_comparison()?;
-            left = Expr::Binary { left: Box::new(left), op, right: Box::new(right) };
+            left = Expr::Binary {
+                left: Box::new(left),
+                op,
+                right: Box::new(right),
+            };
         }
         Ok(left)
     }
@@ -418,7 +455,11 @@ impl Parser {
             };
             self.advance();
             let right = self.parse_term()?;
-            left = Expr::Binary { left: Box::new(left), op, right: Box::new(right) };
+            left = Expr::Binary {
+                left: Box::new(left),
+                op,
+                right: Box::new(right),
+            };
         }
         Ok(left)
     }
@@ -433,7 +474,11 @@ impl Parser {
             };
             self.advance();
             let right = self.parse_factor()?;
-            left = Expr::Binary { left: Box::new(left), op, right: Box::new(right) };
+            left = Expr::Binary {
+                left: Box::new(left),
+                op,
+                right: Box::new(right),
+            };
         }
         Ok(left)
     }
@@ -448,7 +493,11 @@ impl Parser {
             };
             self.advance();
             let right = self.parse_postfix()?;
-            left = Expr::Binary { left: Box::new(left), op, right: Box::new(right) };
+            left = Expr::Binary {
+                left: Box::new(left),
+                op,
+                right: Box::new(right),
+            };
         }
         Ok(left)
     }
@@ -462,7 +511,10 @@ impl Parser {
             if self.check(&TokenKind::Dot) {
                 self.advance();
                 let field = self.expect_identifier()?;
-                expr = Expr::FieldAccess { object: Box::new(expr), field };
+                expr = Expr::FieldAccess {
+                    object: Box::new(expr),
+                    field,
+                };
             } else if self.check(&TokenKind::LBracket) {
                 self.advance();
                 let prev = self.allow_struct_literal;
@@ -470,7 +522,10 @@ impl Parser {
                 let index = self.parse_expr()?;
                 self.allow_struct_literal = prev;
                 self.expect(&TokenKind::RBracket, "]")?;
-                expr = Expr::Index { array: Box::new(expr), index: Box::new(index) };
+                expr = Expr::Index {
+                    array: Box::new(expr),
+                    index: Box::new(index),
+                };
             } else if self.check(&TokenKind::Question) {
                 self.advance();
                 expr = Expr::Try(Box::new(expr));
@@ -540,7 +595,11 @@ impl Parser {
                     } else {
                         Vec::new()
                     };
-                    Ok(Expr::EnumLiteral { enum_name: name, variant, fields })
+                    Ok(Expr::EnumLiteral {
+                        enum_name: name,
+                        variant,
+                        fields,
+                    })
                 } else if self.check(&TokenKind::LParen) {
                     self.advance();
                     let args = self.parse_call_args()?;
@@ -704,7 +763,9 @@ mod tests {
     fn reports_missing_closing_brace() {
         let err = parse("fn main() {").unwrap_err();
         match err {
-            ParseError::UnexpectedToken { expected, found, .. } => {
+            ParseError::UnexpectedToken {
+                expected, found, ..
+            } => {
                 assert_eq!(expected, "expression");
                 assert_eq!(found, TokenKind::Eof);
             }
@@ -754,7 +815,12 @@ mod tests {
             }
         "#;
         let program = parse(source).unwrap();
-        let Stmt::If { condition, then_branch, else_branch } = &program.functions[0].body[0] else {
+        let Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } = &program.functions[0].body[0]
+        else {
             panic!("expected If statement");
         };
 
@@ -868,8 +934,14 @@ mod tests {
         assert_eq!(
             func.params,
             vec![
-                Param { name: "a".to_string(), type_name: "Int".to_string() },
-                Param { name: "b".to_string(), type_name: "Int".to_string() },
+                Param {
+                    name: "a".to_string(),
+                    type_name: "Int".to_string()
+                },
+                Param {
+                    name: "b".to_string(),
+                    type_name: "Int".to_string()
+                },
             ]
         );
         assert_eq!(func.return_type, Some("Int".to_string()));
@@ -918,8 +990,14 @@ mod tests {
         assert_eq!(
             program.structs[0].fields,
             vec![
-                Param { name: "x".to_string(), type_name: "Int".to_string() },
-                Param { name: "y".to_string(), type_name: "Int".to_string() },
+                Param {
+                    name: "x".to_string(),
+                    type_name: "Int".to_string()
+                },
+                Param {
+                    name: "y".to_string(),
+                    type_name: "Int".to_string()
+                },
             ]
         );
     }
@@ -980,7 +1058,12 @@ mod tests {
         // `if x { ... }`: the `{` must open the if-block, not a
         // struct literal `x { ... }`.
         let program = parse(r#"fn main() { if x { print("hi") } }"#).unwrap();
-        let Stmt::If { condition, then_branch, .. } = &program.functions[0].body[0] else {
+        let Stmt::If {
+            condition,
+            then_branch,
+            ..
+        } = &program.functions[0].body[0]
+        else {
             panic!("expected If statement");
         };
         assert_eq!(*condition, Expr::Identifier("x".to_string()));
@@ -991,8 +1074,7 @@ mod tests {
     fn struct_literal_allowed_inside_call_args_within_if_condition() {
         // Inside f(...), we're in an unambiguous bracketed context
         // even though we're syntactically inside an if condition.
-        let program =
-            parse(r#"fn main() { if f(Point { x: 1, y: 2 }) { print("hi") } }"#).unwrap();
+        let program = parse(r#"fn main() { if f(Point { x: 1, y: 2 }) { print("hi") } }"#).unwrap();
         let Stmt::If { condition, .. } = &program.functions[0].body[0] else {
             panic!("expected If statement");
         };
@@ -1018,12 +1100,21 @@ mod tests {
         assert_eq!(program.enums.len(), 1);
         let e = &program.enums[0];
         assert_eq!(e.name, "Status");
-        assert_eq!(e.variants[0], EnumVariant { name: "Pending".to_string(), fields: vec![] });
+        assert_eq!(
+            e.variants[0],
+            EnumVariant {
+                name: "Pending".to_string(),
+                fields: vec![]
+            }
+        );
         assert_eq!(
             e.variants[1],
             EnumVariant {
                 name: "Failed".to_string(),
-                fields: vec![Param { name: "reason".to_string(), type_name: "String".to_string() }],
+                fields: vec![Param {
+                    name: "reason".to_string(),
+                    type_name: "String".to_string()
+                }],
             }
         );
     }
@@ -1055,7 +1146,10 @@ mod tests {
             Expr::EnumLiteral {
                 enum_name: "Status".to_string(),
                 variant: "Failed".to_string(),
-                fields: vec![("reason".to_string(), Expr::StringLiteral("oops".to_string()))],
+                fields: vec![(
+                    "reason".to_string(),
+                    Expr::StringLiteral("oops".to_string())
+                )],
             }
         );
     }
@@ -1121,7 +1215,9 @@ mod tests {
             Stmt::VariableDecl {
                 name: "a".to_string(),
                 value: Expr::ArrayLiteral(vec![
-                    Expr::IntLiteral(1), Expr::IntLiteral(2), Expr::IntLiteral(3)
+                    Expr::IntLiteral(1),
+                    Expr::IntLiteral(2),
+                    Expr::IntLiteral(3)
                 ]),
                 is_mutable: false,
             }
@@ -1160,7 +1256,10 @@ mod tests {
         };
         assert_eq!(
             *value,
-            Expr::Try(Box::new(Expr::Call { callee: "doThing".to_string(), args: vec![] }))
+            Expr::Try(Box::new(Expr::Call {
+                callee: "doThing".to_string(),
+                args: vec![]
+            }))
         );
     }
 

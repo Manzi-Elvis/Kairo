@@ -3,8 +3,15 @@ use crate::token::{Token, TokenKind};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LexError {
-    UnterminatedString { line: usize, column: usize },
-    UnrecognizedChar { ch: char, line: usize, column: usize },
+    UnterminatedString {
+        line: usize,
+        column: usize,
+    },
+    UnrecognizedChar {
+        ch: char,
+        line: usize,
+        column: usize,
+    },
 }
 
 pub struct Lexer {
@@ -125,7 +132,6 @@ impl Lexer {
             "import" => TokenKind::Import,
             "export" => TokenKind::Export,
             _ => TokenKind::Identifier(ident),
-            
         }
     }
 
@@ -497,7 +503,11 @@ mod tests {
         let kinds = kinds("x?");
         assert_eq!(
             kinds,
-            vec![TokenKind::Identifier("x".into()), TokenKind::Question, TokenKind::Eof]
+            vec![
+                TokenKind::Identifier("x".into()),
+                TokenKind::Question,
+                TokenKind::Eof
+            ]
         );
     }
 
@@ -507,10 +517,17 @@ mod tests {
         assert_eq!(
             kinds,
             vec![
-                TokenKind::Module, TokenKind::Identifier("foo".into()),
-                TokenKind::Import, TokenKind::Identifier("bar".into()),
-                TokenKind::Export, TokenKind::Fn, TokenKind::Identifier("f".into()),
-                TokenKind::LParen, TokenKind::RParen, TokenKind::LBrace, TokenKind::RBrace,
+                TokenKind::Module,
+                TokenKind::Identifier("foo".into()),
+                TokenKind::Import,
+                TokenKind::Identifier("bar".into()),
+                TokenKind::Export,
+                TokenKind::Fn,
+                TokenKind::Identifier("f".into()),
+                TokenKind::LParen,
+                TokenKind::RParen,
+                TokenKind::LBrace,
+                TokenKind::RBrace,
                 TokenKind::Eof,
             ]
         );
