@@ -558,3 +558,19 @@ not missing features:
   in the interpreter
 - A non-returning function path gets a silent default value natively
   rather than surfacing the interpreter's Unit-mismatch behavior
+
+
+---
+
+# Kairo v0.22: native 64-bit Int and division-by-zero checks
+
+`kairo build` now uses 64-bit `Int`, matching the interpreter, and
+`print` uses `%lld` for the wider type. Every division checks its
+divisor: on zero it prints `division by zero` and exits with status
+1, instead of invoking LLVM's undefined behavior for `sdiv`.
+
+## Still different from the interpreter
+- No real memory management (everything leaks via malloc)
+- Struct/enum/array equality is not implemented in codegen
+- A function that doesn't return on every path gets a silent default
+  value natively
