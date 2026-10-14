@@ -574,3 +574,26 @@ divisor: on zero it prints `division by zero` and exits with status
 - Struct/enum/array equality is not implemented in codegen
 - A function that doesn't return on every path gets a silent default
   value natively
+
+ 
+---
+
+# Kairo v0.23: lexical block scoping
+
+Every `{ ... }` block is now its own scope.
+
+- A variable is visible from its declaration to the end of its block.
+- Declaring a name that already exists in the same block is an error.
+  Declaring a name that exists in an enclosing block shadows it.
+- Parameters and the top level of a function body share one scope, so
+  redeclaring a parameter is an error.
+- Variables declared in a loop body are fresh on every iteration.
+- `match` arm bindings are scoped to their arm.
+
+## Fixes
+- Interpreter: declaring a variable inside a loop body, a `match`
+  inside a loop, or the same binding name in two `match`es no longer
+  fails with `AlreadyDeclared`.
+- Native: stack slots are hoisted to the function entry block and
+  uniquely named, so loops no longer grow the stack and same-named
+  variables in different blocks produce valid IR.
