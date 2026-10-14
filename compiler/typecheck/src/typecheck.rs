@@ -67,6 +67,34 @@ pub enum TypeError {
     NotResultShaped(String),
 }
 
+/// Lexical scopes, innermost last. Lookups search innermost to outermost.
+struct Scopes {
+    frames: Vec<HashMap<String, (Type, bool)>>,
+}
+
+impl Scopes {
+    fn new() -> Self {
+        Self { frames: vec![HashMap::new()] }
+    }
+    fn push(&mut self) {
+        self.frames.push(HashMap::new());
+    }
+    fn pop(&mut self) {
+        self.frames.pop();
+    }
+    fn get(&self, name: &str) -> Option<&(Type, bool)> {
+        self.frames.iter().rev().find_map(|f| f.get(name))
+    }
+    fn declared_in_current(&self, name: &str) -> bool {
+        self.frames.last().is_some_and(|f| f.contains_key(name))
+    }
+    fn insert(&mut self, name: String, entry: (Type, bool)) {
+        if let Some(f) = self.frames.last_mut() {
+            f.insert(name, entry);
+        }
+    }
+}
+
 struct FunctionSig {
     params: Vec<Type>,
     return_type: Type,
@@ -196,7 +224,7 @@ impl TypeChecker {
     }
 
     fn check_function_body(&mut self, f: &FunctionDecl, errors: &mut Vec<TypeError>) {
-        let mut scope: HashMap<String, (Type, bool)> = HashMap::new();
+        let mut scope = Scopes::new();
         for p in &f.params {
             if let Some(t) = self.resolve_type(&p.type_name) {
                 scope.insert(p.name.clone(), (t, false));
@@ -220,7 +248,7 @@ impl TypeChecker {
     fn check_stmt(
         &self,
         stmt: &Stmt,
-        scope: &mut HashMap<String, (Type, bool)>,
+        scope: &mut Scopes,
         return_type: &Type,
         errors: &mut Vec<TypeError>,
     ) {
@@ -230,7 +258,7 @@ impl TypeChecker {
                 value,
                 is_mutable,
             } => {
-                if scope.contains_key(name) {
+                if scope.declared_in_current(name) {
                     errors.push(TypeError::AlreadyDeclared(name.clone()));
                 }
 
@@ -300,42 +328,39 @@ impl TypeChecker {
                 self.eval_expr_type(expr, scope, errors);
             }
 
-            Stmt::If {
-                condition,
-                then_branch,
-                else_branch,
-            } => {
+            Stmt::If { condition, then_branch, else_branch } => {
                 self.check_condition(condition, scope, errors);
-
+                scope.push();
                 for s in then_branch {
                     self.check_stmt(s, scope, return_type, errors);
                 }
-
+                scope.pop();
                 if let Some(else_stmts) = else_branch {
+                    scope.push();
                     for s in else_stmts {
                         self.check_stmt(s, scope, return_type, errors);
                     }
+                    scope.pop();
                 }
             }
-
             Stmt::While { condition, body } => {
                 self.check_condition(condition, scope, errors);
-
+                scope.push();
                 for s in body {
                     self.check_stmt(s, scope, return_type, errors);
                 }
+                scope.pop();
             }
 
             Stmt::Match { scrutinee, arms } => {
                 if let Some(scrutinee_type) = self.eval_expr_type(scrutinee, scope, errors) {
                     for arm in arms {
-                        let mut arm_scope = scope.clone();
-
-                        self.check_pattern(&arm.pattern, &scrutinee_type, &mut arm_scope, errors);
-
+                        scope.push();
+                        self.check_pattern(&arm.pattern, &scrutinee_type, scope, errors);
                         for s in &arm.body {
-                            self.check_stmt(s, &mut arm_scope, return_type, errors);
+                            self.check_stmt(s, scope, return_type, errors);
                         }
+                        scope.pop();
                     }
 
                     self.check_exhaustiveness(&scrutinee_type, arms, errors);
@@ -365,7 +390,7 @@ impl TypeChecker {
         &self,
         pattern: &Pattern,
         scrutinee_type: &Type,
-        scope: &mut HashMap<String, (Type, bool)>,
+        scope: &mut Scopes,
         errors: &mut Vec<TypeError>,
     ) {
         match pattern {
@@ -504,7 +529,7 @@ impl TypeChecker {
     fn check_condition(
         &self,
         condition: &Expr,
-        scope: &HashMap<String, (Type, bool)>,
+        scope: &Scopes,
         errors: &mut Vec<TypeError>,
     ) {
         if let Some(t) = self.eval_expr_type(condition, scope, errors) {
@@ -521,7 +546,7 @@ impl TypeChecker {
     fn eval_expr_type(
         &self,
         expr: &Expr,
-        scope: &HashMap<String, (Type, bool)>,
+        scope: &Scopes,
         errors: &mut Vec<TypeError>,
     ) -> Option<Type> {
         match expr {
@@ -674,7 +699,7 @@ impl TypeChecker {
         &self,
         callee: &str,
         args: &[Expr],
-        scope: &HashMap<String, (Type, bool)>,
+        scope: &Scopes,
         errors: &mut Vec<TypeError>,
     ) -> Option<Type> {
         if callee == "print" {
@@ -784,7 +809,7 @@ impl TypeChecker {
         &self,
         name: &str,
         fields: &[(String, Expr)],
-        scope: &HashMap<String, (Type, bool)>,
+        scope: &Scopes,
         errors: &mut Vec<TypeError>,
     ) -> Option<Type> {
         let Some(decl_fields) = self.struct_fields.get(name) else {
@@ -839,7 +864,7 @@ impl TypeChecker {
         enum_name: &str,
         variant: &str,
         fields: &[(String, Expr)],
-        scope: &HashMap<String, (Type, bool)>,
+        scope: &Scopes,
         errors: &mut Vec<TypeError>,
     ) -> Option<Type> {
         let Some(variants) = self.enum_variants.get(enum_name) else {
@@ -902,7 +927,7 @@ impl TypeChecker {
     fn check_try(
         &self,
         inner: &Expr,
-        scope: &HashMap<String, (Type, bool)>,
+        scope: &Scopes,
         errors: &mut Vec<TypeError>,
     ) -> Option<Type> {
         let inner_type = self.eval_expr_type(inner, scope, errors)?;
@@ -1231,5 +1256,29 @@ mod tests {
         "#;
         let err = check(source).unwrap_err();
         assert!(err.iter().any(|e| matches!(e, TypeError::Mismatch { .. })));
+    }
+
+    #[test]
+    fn allows_declarations_inside_loop_bodies() {
+        let source = "fn main() {\n mut i := 0\n while i < 3 {\n y := i * 2\n print(y)\n i = i + 1\n }\n}";
+        assert_eq!(check(source), Ok(()));
+    }
+
+    #[test]
+    fn allows_shadowing_in_inner_block() {
+        let source = "fn main() {\n x := 1\n if true {\n x := 2\n print(x)\n }\n print(x)\n}";
+        assert_eq!(check(source), Ok(()));
+    }
+
+    #[test]
+    fn rejects_redeclaration_in_same_block() {
+        let err = check("fn main() { x := 1\nx := 2 }").unwrap_err();
+        assert!(err.contains(&TypeError::AlreadyDeclared("x".to_string())));
+    }
+
+    #[test]
+    fn inner_declarations_do_not_leak_out() {
+        let err = check("fn main() { if true { y := 1 }\nprint(y) }").unwrap_err();
+        assert!(err.contains(&TypeError::UndefinedVariable("y".to_string())));
     }
 }

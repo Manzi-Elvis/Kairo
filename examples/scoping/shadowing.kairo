@@ -1,0 +1,14 @@
+fn main() {
+    total := 100
+    mut i := 0
+    while i < 3 {
+        square := i * i
+        print(square)
+        i = i + 1
+    }
+    if true {
+        total := 5
+        print(total)
+    }
+    print(total)
+}
