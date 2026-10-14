@@ -350,7 +350,9 @@ struct FnCodegen<'a> {
     struct_types: &'a StructTable,
     enum_types: &'a EnumTable,
     oob_len: usize,
-    locals: HashMap<String, (String, LType)>,
+    scopes: Vec<HashMap<String, (String, LType)>>,
+    allocas: Vec<String>,
+    slot_counter: usize,
     lines: Vec<String>,
     temp_counter: usize,
     block_counter: usize,
@@ -371,7 +373,9 @@ impl<'a> FnCodegen<'a> {
             struct_types,
             enum_types,
             oob_len,
-            locals: HashMap::new(),
+            scopes: vec![HashMap::new()],
+            allocas: Vec::new(),
+            slot_counter: 0,
             lines: Vec::new(),
             temp_counter: 0,
             block_counter: 0,
@@ -434,11 +438,7 @@ impl<'a> FnCodegen<'a> {
         self.start_block(&ok_label);
     }
 
-    fn generate_function(
-        &mut self,
-        f: &HFunctionDecl,
-        sig: &FnSig,
-    ) -> Result<String, CodegenError> {
+    fn generate_function(&mut self, f: &HFunctionDecl, sig: &FnSig) -> Result<String, CodegenError> {
         if f.name == "kairo_main" && f.return_type.is_some() {
             return Err(CodegenError::UnsupportedFeature(
                 "native codegen requires fn main() to have no return type".to_string(),
@@ -452,25 +452,11 @@ impl<'a> FnCodegen<'a> {
             param_decls.push(format!("{} %arg_{}", ty.llvm(), p.name));
         }
 
-        self.lines.push(format!(
-            "define {} @{}({}) {{",
-            ret_ty.llvm(),
-            f.name,
-            param_decls.join(", ")
-        ));
-        self.lines.push("entry:".to_string());
         self.terminated = false;
-
         for (p, ty) in f.params.iter().zip(&sig.params) {
-            let slot = format!("%{}", p.name);
-            self.lines.push(format!("  {slot} = alloca {}", ty.llvm()));
-            self.lines.push(format!(
-                "  store {} %arg_{}, {}* {slot}",
-                ty.llvm(),
-                p.name,
-                ty.llvm()
-            ));
-            self.locals.insert(p.name.clone(), (slot, ty.clone()));
+            let slot = self.declare_local(&p.name, ty);
+            self.lines
+                .push(format!("  store {} %arg_{}, {}* {slot}", ty.llvm(), p.name, ty.llvm()));
         }
 
         self.gen_stmts(&f.body)?;
@@ -486,9 +472,19 @@ impl<'a> FnCodegen<'a> {
                 LType::Array(_) => self.lines.push("  ret %__kairo_array* null".to_string()),
             }
         }
-        self.lines.push("}".to_string());
 
-        Ok(self.lines.join("\n"))
+        let mut out = Vec::new();
+        out.push(format!(
+            "define {} @{}({}) {{",
+            ret_ty.llvm(),
+            f.name,
+            param_decls.join(", ")
+        ));
+        out.push("entry:".to_string());
+        out.extend(self.allocas.drain(..));
+        out.extend(self.lines.drain(..));
+        out.push("}".to_string());
+        Ok(out.join("\n"))
     }
 
     fn gen_stmts(&mut self, stmts: &[HStmt]) -> Result<(), CodegenError> {
@@ -504,36 +500,24 @@ impl<'a> FnCodegen<'a> {
     fn gen_stmt(&mut self, stmt: &HStmt) -> Result<(), CodegenError> {
         match stmt {
             HStmt::VariableDecl { name, value, .. } => {
+                // Evaluate first, declare second, so an inner `x := x + 1`
+                // reads the outer `x`.
                 let (val, ty) = self.gen_expr(value)?;
-                let slot = format!("%{name}");
-                self.emit(format!("  {slot} = alloca {}", ty.llvm()));
-                self.emit(format!(
-                    "  store {} {val}, {}* {slot}",
-                    ty.llvm(),
-                    ty.llvm()
-                ));
-                self.locals.insert(name.clone(), (slot, ty));
+                let slot = self.declare_local(name, &ty);
+                self.emit(format!("  store {} {val}, {}* {slot}", ty.llvm(), ty.llvm()));
                 Ok(())
             }
             HStmt::Assign { name, value } => {
                 let (val, ty) = self.gen_expr(value)?;
                 let (slot, _) = self
-                    .locals
-                    .get(name)
-                    .cloned()
+                    .lookup(name)
                     .ok_or_else(|| CodegenError::UndefinedVariable(name.clone()))?;
-                self.emit(format!(
-                    "  store {} {val}, {}* {slot}",
-                    ty.llvm(),
-                    ty.llvm()
-                ));
+                self.emit(format!("  store {} {val}, {}* {slot}", ty.llvm(), ty.llvm()));
                 Ok(())
             }
             HStmt::IndexAssign { name, index, value } => {
                 let (slot, arr_ty) = self
-                    .locals
-                    .get(name)
-                    .cloned()
+                    .lookup(name)
                     .ok_or_else(|| CodegenError::UndefinedVariable(name.clone()))?;
                 let LType::Array(elem_ty) = arr_ty else {
                     return Err(CodegenError::UnsupportedFeature(
@@ -572,32 +556,26 @@ impl<'a> FnCodegen<'a> {
                 ));
 
                 let (val, _) = self.gen_expr(value)?;
-                self.emit(format!(
-                    "  store {elem_llvm} {val}, {elem_llvm}* {elem_ptr}"
-                ));
+                self.emit(format!("  store {elem_llvm} {val}, {elem_llvm}* {elem_ptr}"));
                 Ok(())
             }
             HStmt::Expr(e) => {
                 self.gen_expr(e)?;
                 Ok(())
             }
-            HStmt::If {
-                condition,
-                then_branch,
-                else_branch,
-            } => {
+            HStmt::If { condition, then_branch, else_branch } => {
                 let (cond_val, _) = self.gen_expr(condition)?;
                 let idx = self.fresh_idx();
                 let then_label = format!("then{idx}");
                 let else_label = format!("else{idx}");
                 let merge_label = format!("merge{idx}");
 
-                self.emit(format!(
-                    "  br i1 {cond_val}, label %{then_label}, label %{else_label}"
-                ));
+                self.emit(format!("  br i1 {cond_val}, label %{then_label}, label %{else_label}"));
 
                 self.start_block(&then_label);
+                self.push_scope();
                 self.gen_stmts(then_branch)?;
+                self.pop_scope();
                 let then_terminated = self.terminated;
                 if !then_terminated {
                     self.emit(format!("  br label %{merge_label}"));
@@ -605,7 +583,9 @@ impl<'a> FnCodegen<'a> {
 
                 self.start_block(&else_label);
                 if let Some(else_stmts) = else_branch {
+                    self.push_scope();
                     self.gen_stmts(else_stmts)?;
+                    self.pop_scope();
                 }
                 let else_terminated = self.terminated;
                 if !else_terminated {
@@ -635,7 +615,9 @@ impl<'a> FnCodegen<'a> {
                 ));
 
                 self.start_block(&body_label);
+                self.push_scope();
                 self.gen_stmts(body)?;
+                self.pop_scope();
                 if !self.terminated {
                     self.emit(format!("  br label %{cond_label}"));
                 }
@@ -675,9 +657,7 @@ impl<'a> FnCodegen<'a> {
             }
             HExpr::Identifier(name) => {
                 let (slot, ty) = self
-                    .locals
-                    .get(name)
-                    .cloned()
+                    .lookup(name)
                     .ok_or_else(|| CodegenError::UndefinedVariable(name.clone()))?;
                 let t = self.fresh_temp();
                 self.emit(format!("  {t} = load {}, {}* {slot}", ty.llvm(), ty.llvm()));
@@ -1446,6 +1426,32 @@ impl<'a> FnCodegen<'a> {
             Ok((t, ret_ty))
         }
     }
+
+    fn lookup(&self, name: &str) -> Option<(String, LType)> {
+        self.scopes.iter().rev().find_map(|s| s.get(name)).cloned()
+    }
+
+    /// Reserves a uniquely named stack slot. The alloca is hoisted to the
+    /// function's entry block (see generate_function), so slots declared in
+    /// loops don't grow the stack per iteration, and the same name in
+    /// different blocks never collides.
+    fn declare_local(&mut self, name: &str, ty: &LType) -> String {
+        self.slot_counter += 1;
+        let slot = format!("%{}.{}", name, self.slot_counter);
+        self.allocas.push(format!("  {slot} = alloca {}", ty.llvm()));
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.insert(name.to_string(), (slot.clone(), ty.clone()));
+        }
+        slot
+    }
+
+    fn push_scope(&mut self) {
+        self.scopes.push(HashMap::new());
+    }
+
+    fn pop_scope(&mut self) {
+        self.scopes.pop();
+    }
 }
 
 #[cfg(test)]
@@ -1571,5 +1577,41 @@ mod tests {
     fn uses_64_bit_int_print_format() {
         let ir = gen_source("fn main() { print(1) }").unwrap();
         assert!(ir.contains(r#"c"%lld\0A\00""#));
+    }
+
+    #[test]
+    fn hoists_allocas_out_of_loops() {
+        let source = r#"
+            fn main() {
+                mut i := 0
+                while i < 3 {
+                    y := i * 2
+                    print(y)
+                    i = i + 1
+                }
+            }
+        "#;
+        let ir = gen_source(source).unwrap();
+        let entry = ir.find("entry:").unwrap();
+        let loop_start = ir.find("whilecond1:").unwrap();
+        let alloca_y = ir.find("%y.").unwrap();
+        assert!(alloca_y > entry && alloca_y < loop_start);
+    }
+
+    #[test]
+    fn same_name_in_different_blocks_gets_distinct_slots() {
+        let source = r#"
+            fn main() {
+                x := 1
+                if true {
+                    x := 2
+                    print(x)
+                }
+                print(x)
+            }
+        "#;
+        let ir = gen_source(source).unwrap();
+        assert!(ir.contains("%x.1 = alloca"));
+        assert!(ir.contains("%x.2 = alloca"));
     }
 }

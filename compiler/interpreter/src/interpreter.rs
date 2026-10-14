@@ -40,7 +40,7 @@ enum ControlFlow {
 }
 
 pub struct Interpreter<'a> {
-    env: HashMap<String, Binding>,
+    scopes: Vec<HashMap<String, Binding>>,
     functions: HashMap<String, HFunctionDecl>,
     structs: HashMap<String, StructDecl>,
     enums: HashMap<String, EnumDecl>,
@@ -50,7 +50,7 @@ pub struct Interpreter<'a> {
 impl<'a> Interpreter<'a> {
     pub fn new(print_sink: &'a mut dyn FnMut(&str)) -> Self {
         Self {
-            env: HashMap::new(),
+            scopes: vec![HashMap::new()],
             functions: HashMap::new(),
             structs: HashMap::new(),
             enums: HashMap::new(),
@@ -80,6 +80,13 @@ impl<'a> Interpreter<'a> {
     }
 
     fn exec_block(&mut self, stmts: &[HStmt]) -> Result<ControlFlow, RuntimeError> {
+        self.scopes.push(HashMap::new());
+        let result = self.exec_stmts(stmts);
+        self.scopes.pop();
+        result
+    }
+
+    fn exec_stmts(&mut self, stmts: &[HStmt]) -> Result<ControlFlow, RuntimeError> {
         for stmt in stmts {
             match self.exec_stmt(stmt) {
                 Err(RuntimeError::TryPropagate(err_value)) => {
@@ -98,27 +105,20 @@ impl<'a> Interpreter<'a> {
 
     fn exec_stmt(&mut self, stmt: &HStmt) -> Result<ControlFlow, RuntimeError> {
         match stmt {
-            HStmt::VariableDecl {
-                name,
-                value,
-                is_mutable,
-            } => {
-                if self.env.contains_key(name) {
+            HStmt::VariableDecl { name, value, is_mutable } => {
+                if self.scopes.last().is_some_and(|scope| scope.contains_key(name)) {
                     return Err(RuntimeError::AlreadyDeclared(name.clone()));
                 }
                 let v = self.eval_expr(value)?;
-                self.env.insert(
-                    name.clone(),
-                    Binding {
-                        value: v,
-                        is_mutable: *is_mutable,
-                    },
-                );
+                if let Some(scope) = self.scopes.last_mut() {
+                    scope.insert(name.clone(), Binding { value: v, is_mutable: *is_mutable });
+                }
                 Ok(ControlFlow::Normal)
             }
+
             HStmt::Assign { name, value } => {
                 let v = self.eval_expr(value)?;
-                match self.env.get_mut(name) {
+                match self.lookup_mut(name) {
                     None => Err(RuntimeError::UndefinedVariable(name.clone())),
                     Some(binding) if !binding.is_mutable => {
                         Err(RuntimeError::ImmutableAssignment(name.clone()))
@@ -138,7 +138,7 @@ impl<'a> Interpreter<'a> {
                     )));
                 };
                 let new_val = self.eval_expr(value)?;
-                match self.env.get_mut(name) {
+                match self.lookup_mut(name) {
                     None => Err(RuntimeError::UndefinedVariable(name.clone())),
                     Some(binding) if !binding.is_mutable => {
                         Err(RuntimeError::ImmutableAssignment(name.clone()))
@@ -210,8 +210,7 @@ impl<'a> Interpreter<'a> {
             HExpr::BoolLiteral(b) => Ok(Value::Bool(*b)),
 
             HExpr::Identifier(name) => self
-                .env
-                .get(name)
+                .lookup(name)
                 .map(|binding| binding.value.clone())
                 .ok_or_else(|| RuntimeError::UndefinedVariable(name.clone())),
 
@@ -537,24 +536,27 @@ impl<'a> Interpreter<'a> {
         for arg in args {
             arg_values.push(self.eval_expr(arg)?);
         }
-        let mut call_env = HashMap::new();
+        let mut frame = HashMap::new();
         for (param, value) in func.params.iter().zip(arg_values) {
-            call_env.insert(
-                param.name.clone(),
-                Binding {
-                    value,
-                    is_mutable: false,
-                },
-            );
+            frame.insert(param.name.clone(), Binding { value, is_mutable: false });
         }
-        let caller_env = std::mem::replace(&mut self.env, call_env);
+
+        let caller_scopes = std::mem::replace(&mut self.scopes, vec![frame]);
         let result = self.exec_block(&func.body);
-        self.env = caller_env;
+        self.scopes = caller_scopes;
 
         match result? {
             ControlFlow::Return(value) => Ok(value),
             ControlFlow::Normal => Ok(Value::Unit),
         }
+    }
+
+    fn lookup(&self, name: &str) -> Option<&Binding> {
+        self.scopes.iter().rev().find_map(|scope| scope.get(name))
+    }
+
+    fn lookup_mut(&mut self, name: &str) -> Option<&mut Binding> {
+        self.scopes.iter_mut().rev().find_map(|scope| scope.get_mut(name))
     }
 }
 
@@ -826,5 +828,55 @@ mod tests {
             }
         "#;
         assert_eq!(run_and_capture(source).unwrap(), vec!["boom".to_string()]);
+    }
+
+    #[test]
+    fn allows_declarations_inside_loop_bodies() {
+        let source = r#"
+            fn main() {
+                mut i := 0
+                while i < 3 {
+                    y := i * 2
+                    print(y)
+                    i = i + 1
+                }
+            }
+        "#;
+        assert_eq!(
+            run_and_capture(source).unwrap(),
+            vec!["0".to_string(), "2".to_string(), "4".to_string()]
+        );
+    }
+
+    #[test]
+    fn allows_shadowing_in_inner_block() {
+        let source = "fn main() { x := 1\nif true { x := 2\nprint(x) }\nprint(x) }";
+        assert_eq!(
+            run_and_capture(source).unwrap(),
+            vec!["2".to_string(), "1".to_string()]
+        );
+    }
+
+    #[test]
+    fn reuses_match_binding_names_across_matches() {
+        let source = r#"
+            enum R { Ok(value: Int), Err(error: String) }
+            fn main() {
+                a := R::Ok(value: 1)
+                b := R::Ok(value: 2)
+                match a { R::Ok(v) => { print(v) } R::Err(e) => { print(e) } }
+                match b { R::Ok(v) => { print(v) } R::Err(e) => { print(e) } }
+            }
+        "#;
+        assert_eq!(
+            run_and_capture(source).unwrap(),
+            vec!["1".to_string(), "2".to_string()]
+        );
+    }
+
+    #[test]
+    fn rejects_redeclaration_in_the_same_scope() {
+        let err = run_and_capture("fn main() { x := 1\nx := 2 }").unwrap_err();
+        assert_eq!(err, RuntimeError::AlreadyDeclared("x".to_string()));
     }
 }
