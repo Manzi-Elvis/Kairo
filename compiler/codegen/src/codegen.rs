@@ -27,7 +27,7 @@
 //!   guarantees it's the same enum as the `?`'d expression's type.
 
 const DIV_MSG: &str = "division by zero\n";
-use kairo_ast::{BinaryOp, Param};
+use kairo_ast::{BinaryOp, Param, UnaryOp};
 use kairo_hir::{HExpr, HFunctionDecl, HProgram, HStmt};
 use std::collections::{HashMap, HashSet};
 
@@ -341,6 +341,7 @@ fn collect_in_expr(expr: &HExpr, found: &mut Vec<String>) {
         HExpr::Try(inner) => collect_in_expr(inner, found),
         HExpr::IsVariant { scrutinee, .. } => collect_in_expr(scrutinee, found),
         HExpr::VariantField { scrutinee, .. } => collect_in_expr(scrutinee, found),
+        HExpr::Unary { operand, .. } => collect_in_expr(operand, found),
     }
 }
 
@@ -663,7 +664,11 @@ impl<'a> FnCodegen<'a> {
                 self.emit(format!("  {t} = load {}, {}* {slot}", ty.llvm(), ty.llvm()));
                 Ok((t, ty))
             }
-            HExpr::Binary { left, op, right } => self.gen_binary(left, *op, right),
+            HExpr::Binary { left, op, right } => match op {
+                BinaryOp::And | BinaryOp::Or => self.gen_logical(left, *op, right),
+                _ => self.gen_binary(left, *op, right),
+            },
+            HExpr::Unary { op, operand } => self.gen_unary(*op, operand),
             HExpr::Call { callee, args } => self.gen_call(callee, args),
             HExpr::StructLiteral { name, fields } => self.gen_struct_literal(name, fields),
             HExpr::FieldAccess { object, field } => self.gen_field_access(object, field),
@@ -1178,7 +1183,7 @@ impl<'a> FnCodegen<'a> {
                 self.emit(format!("  {t} = icmp ne i32 {cmp}, 0"));
                 Ok((t, LType::I1))
             }
-            Div => {
+            Div | Rem => {
                 // Print a message and exit(1) on a zero divisor, matching
                 // the interpreter's clean DivisionByZero error instead of
                 // LLVM's undefined behavior for sdiv.
@@ -1204,7 +1209,8 @@ impl<'a> FnCodegen<'a> {
 
                 self.start_block(&ok_label);
                 let t = self.fresh_temp();
-                self.emit(format!("  {t} = sdiv i64 {l}, {r}"));
+                let instr = if op == Div { "sdiv" } else { "srem" };
+                self.emit(format!("  {t} = {instr} i64 {l}, {r}"));
                 Ok((t, LType::Int))
             }
             _ => {
@@ -1213,7 +1219,7 @@ impl<'a> FnCodegen<'a> {
                     Add => (format!("add i64 {l}, {r}"), LType::Int),
                     Sub => (format!("sub i64 {l}, {r}"), LType::Int),
                     Mul => (format!("mul i64 {l}, {r}"), LType::Int),
-                    Div => unreachable!("handled by the dedicated Div arm above"),
+                    Div | Rem | And | Or => unreachable!("handled by dedicated arms above"),
                     Lt => (format!("icmp slt i64 {l}, {r}"), LType::I1),
                     Gt => (format!("icmp sgt i64 {l}, {r}"), LType::I1),
                     Le => (format!("icmp sle i64 {l}, {r}"), LType::I1),
@@ -1452,6 +1458,61 @@ impl<'a> FnCodegen<'a> {
     fn pop_scope(&mut self) {
         self.scopes.pop();
     }
+
+    /// A stack slot with no source-level name, hoisted like declare_local.
+    fn temp_slot(&mut self, ty: &LType) -> String {
+        self.slot_counter += 1;
+        let slot = format!("%tmp.{}", self.slot_counter);
+        self.allocas.push(format!("  {slot} = alloca {}", ty.llvm()));
+        slot
+    }
+
+    fn gen_unary(&mut self, op: UnaryOp, operand: &HExpr) -> Result<(String, LType), CodegenError> {
+        let (v, _) = self.gen_expr(operand)?;
+        let t = self.fresh_temp();
+        match op {
+            UnaryOp::Neg => {
+                self.emit(format!("  {t} = sub i64 0, {v}"));
+                Ok((t, LType::Int))
+            }
+            UnaryOp::Not => {
+                self.emit(format!("  {t} = xor i1 {v}, true"));
+                Ok((t, LType::I1))
+            }
+        }
+    }
+
+    /// Short-circuiting `&&` / `||`: the right operand is evaluated in its
+    /// own block, so it only runs when the left one doesn't decide the result.
+    fn gen_logical(
+        &mut self,
+        left: &HExpr,
+        op: BinaryOp,
+        right: &HExpr,
+    ) -> Result<(String, LType), CodegenError> {
+        let (l, _) = self.gen_expr(left)?;
+        let slot = self.temp_slot(&LType::I1);
+        self.emit(format!("  store i1 {l}, i1* {slot}"));
+
+        let idx = self.fresh_idx();
+        let rhs_label = format!("logrhs{idx}");
+        let end_label = format!("logend{idx}");
+        if op == BinaryOp::And {
+            self.emit(format!("  br i1 {l}, label %{rhs_label}, label %{end_label}"));
+        } else {
+            self.emit(format!("  br i1 {l}, label %{end_label}, label %{rhs_label}"));
+        }
+
+        self.start_block(&rhs_label);
+        let (r, _) = self.gen_expr(right)?;
+        self.emit(format!("  store i1 {r}, i1* {slot}"));
+        self.emit(format!("  br label %{end_label}"));
+
+        self.start_block(&end_label);
+        let t = self.fresh_temp();
+        self.emit(format!("  {t} = load i1, i1* {slot}"));
+        Ok((t, LType::I1))
+    }
 }
 
 #[cfg(test)]
@@ -1613,5 +1674,26 @@ mod tests {
         let ir = gen_source(source).unwrap();
         assert!(ir.contains("%x.1 = alloca"));
         assert!(ir.contains("%x.2 = alloca"));
+    }
+
+    #[test]
+    fn generates_remainder_with_zero_check() {
+        let ir = gen_source("fn main() { print(7 % 3) }").unwrap();
+        assert!(ir.contains("srem i64"));
+        assert!(ir.contains("divzero1:"));
+    }
+
+    #[test]
+    fn generates_unary_operators() {
+        let ir = gen_source("fn main() { print(-5)\nprint(!true) }").unwrap();
+        assert!(ir.contains("sub i64 0,"));
+        assert!(ir.contains("xor i1"));
+    }
+
+    #[test]
+    fn generates_short_circuit_logic() {
+        let ir = gen_source("fn main() { print(true && false) }").unwrap();
+        assert!(ir.contains("logrhs1:"));
+        assert!(ir.contains("logend1:"));
     }
 }

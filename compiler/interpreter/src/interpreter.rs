@@ -1,4 +1,4 @@
-use kairo_ast::{BinaryOp, EnumDecl, StructDecl};
+use kairo_ast::{BinaryOp, EnumDecl, StructDecl, UnaryOp};
 use kairo_hir::{HExpr, HFunctionDecl, HProgram, HStmt};
 use std::collections::HashMap;
 
@@ -215,10 +215,26 @@ impl<'a> Interpreter<'a> {
                 .ok_or_else(|| RuntimeError::UndefinedVariable(name.clone())),
 
             HExpr::Binary { left, op, right } => {
+                if matches!(op, BinaryOp::And | BinaryOp::Or) {
+                    return self.eval_logical(*op, left, right);
+                }
                 let l = self.eval_expr(left)?;
                 let r = self.eval_expr(right)?;
                 self.eval_binary(*op, l, r)
             }
+
+            HExpr::Unary { op, operand } => match (*op, self.eval_expr(operand)?) {
+                (UnaryOp::Neg, Value::Int(i)) => Ok(Value::Int(i.wrapping_neg())),
+                (UnaryOp::Not, Value::Bool(b)) => Ok(Value::Bool(!b)),
+                (UnaryOp::Neg, other) => Err(RuntimeError::TypeError(format!(
+                    "cannot negate {}",
+                    other.type_name()
+                ))),
+                (UnaryOp::Not, other) => Err(RuntimeError::TypeError(format!(
+                    "cannot apply `!` to {}",
+                    other.type_name()
+                ))),
+            },
 
             HExpr::Call { callee, args } => self.call_function(callee, args),
 
@@ -461,6 +477,14 @@ impl<'a> Interpreter<'a> {
                     Ok(Value::Int(a / b))
                 }
             }),
+            Rem => int_op(l, r, "%", |a, b| {
+                if b == 0 {
+                    Err(RuntimeError::DivisionByZero)
+                } else {
+                    Ok(Value::Int(a.wrapping_rem(b)))
+                }
+            }),
+            And | Or => unreachable!("handled by eval_logical"),
             Eq => Ok(Value::Bool(l == r)),
             NotEq => Ok(Value::Bool(l != r)),
             Lt => int_op(l, r, "<", |a, b| Ok(Value::Bool(a < b))),
@@ -557,6 +581,35 @@ impl<'a> Interpreter<'a> {
 
     fn lookup_mut(&mut self, name: &str) -> Option<&mut Binding> {
         self.scopes.iter_mut().rev().find_map(|scope| scope.get_mut(name))
+    }
+
+    /// `&&` and `||` short-circuit: the right operand is only evaluated
+    /// when the left one doesn't already decide the result.
+    fn eval_logical(
+        &mut self,
+        op: BinaryOp,
+        left: &HExpr,
+        right: &HExpr,
+    ) -> Result<Value, RuntimeError> {
+        let l = match self.eval_expr(left)? {
+            Value::Bool(b) => b,
+            other => {
+                return Err(RuntimeError::TypeError(format!(
+                    "logical operator expects Bool, found {}",
+                    other.type_name()
+                )))
+            }
+        };
+        if (op == BinaryOp::And && !l) || (op == BinaryOp::Or && l) {
+            return Ok(Value::Bool(l));
+        }
+        match self.eval_expr(right)? {
+            Value::Bool(b) => Ok(Value::Bool(b)),
+            other => Err(RuntimeError::TypeError(format!(
+                "logical operator expects Bool, found {}",
+                other.type_name()
+            ))),
+        }
     }
 }
 
@@ -878,5 +931,69 @@ mod tests {
     fn rejects_redeclaration_in_the_same_scope() {
         let err = run_and_capture("fn main() { x := 1\nx := 2 }").unwrap_err();
         assert_eq!(err, RuntimeError::AlreadyDeclared("x".to_string()));
+    }
+
+    #[test]
+    fn runs_remainder_unary_and_logical_operators() {
+        let source = r#"
+            fn main() {
+                print(17 % 5)
+                print(-3 + 1)
+                print(!false)
+                print(1 < 2 && 2 < 3)
+                print(false || 1 > 2)
+            }
+        "#;
+        assert_eq!(
+            run_and_capture(source).unwrap(),
+            vec![
+                "2".to_string(),
+                "-2".to_string(),
+                "true".to_string(),
+                "true".to_string(),
+                "false".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn logical_operators_short_circuit() {
+        // The right side would divide by zero if it were evaluated.
+        let source = r#"
+            fn main() {
+                print(false && 1 / 0 > 0)
+                print(true || 1 / 0 > 0)
+            }
+        "#;
+        assert_eq!(
+            run_and_capture(source).unwrap(),
+            vec!["false".to_string(), "true".to_string()]
+        );
+    }
+
+    #[test]
+    fn reports_remainder_by_zero() {
+        assert_eq!(
+            run_and_capture("fn main() { x := 5 % 0 }").unwrap_err(),
+            RuntimeError::DivisionByZero
+        );
+    }
+
+    #[test]
+    fn runs_else_if_chain() {
+        let source = r#"
+            fn grade(n: Int) -> String {
+                if n >= 90 { return "A" } else if n >= 80 { return "B" } else { return "C" }
+            }
+            fn main() {
+                print(grade(95))
+                print(grade(85))
+                print(grade(10))
+            }
+        "#;
+        assert_eq!(
+            run_and_capture(source).unwrap(),
+            vec!["A".to_string(), "B".to_string(), "C".to_string()]
+        );
     }
 }

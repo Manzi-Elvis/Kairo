@@ -13,7 +13,7 @@
 //! of scope: it only earns its keep in service of a native-codegen
 //! backend, which does not exist yet.
 
-use kairo_ast::{BinaryOp, EnumDecl, Param, StructDecl};
+use kairo_ast::{BinaryOp, EnumDecl, Param, StructDecl, UnaryOp};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HProgram {
@@ -108,5 +108,10 @@ pub enum HExpr {
         enum_name: String,
         variant: String,
         field: String,
+    },
+
+    Unary {
+        op: UnaryOp,
+        operand: Box<HExpr> 
     },
 }

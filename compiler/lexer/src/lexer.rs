@@ -219,6 +219,16 @@ impl Lexer {
                 self.advance();
                 Ok(TokenKind::NotEq)
             }
+            '%' => Ok(TokenKind::Percent),
+            '&' if self.peek() == Some('&') => {
+                self.advance();
+                Ok(TokenKind::AndAnd)
+            }
+            '|' if self.peek() == Some('|') => {
+                self.advance();
+                Ok(TokenKind::OrOr)
+            }
+            '!' => Ok(TokenKind::Bang),
             ':' if self.peek() == Some('=') => {
                 self.advance();
                 Ok(TokenKind::ColonEq)
@@ -528,6 +538,25 @@ mod tests {
                 TokenKind::RParen,
                 TokenKind::LBrace,
                 TokenKind::RBrace,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn tokenizes_logical_and_unary_operators() {
+        let kinds = kinds("a && b || !c % 2");
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::Identifier("a".into()),
+                TokenKind::AndAnd,
+                TokenKind::Identifier("b".into()),
+                TokenKind::OrOr,
+                TokenKind::Bang,
+                TokenKind::Identifier("c".into()),
+                TokenKind::Percent,
+                TokenKind::IntLiteral(2),
                 TokenKind::Eof,
             ]
         );

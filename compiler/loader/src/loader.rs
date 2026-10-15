@@ -186,6 +186,7 @@ impl<'a> Checker<'a> {
                 self.check_expr(left, current)?;
                 self.check_expr(right, current)
             }
+            Unary { operand, .. } => self.check_expr(operand, current),
             Call { callee, args } => {
                 self.check_accessible(callee, current, self.fn_origin)?;
                 for a in args {

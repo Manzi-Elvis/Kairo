@@ -17,6 +17,10 @@ pub enum TokenKind {
     Module,
     Import,
     Export,
+    Percent, // %
+    Bang,    // !
+    AndAnd,  // &&
+    OrOr,    // ||
 
     // Literals
     Identifier(String),
