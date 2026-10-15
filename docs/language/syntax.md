@@ -597,3 +597,21 @@ Every `{ ... }` block is now its own scope.
 - Native: stack slots are hoisted to the function entry block and
   uniquely named, so loops no longer grow the stack and same-named
   variables in different blocks produce valid IR.
+
+
+---
+
+# Kairo v0.24: more operators and `else if`
+
+## New syntax
+- `else if` chains: `if a { ... } else if b { ... } else { ... }`
+  (sugar for `else { if ... }`).
+- `%` remainder. A zero right-hand side is a runtime error, like `/`.
+- Unary `-` and `!`.
+- `&&` and `||`, which short-circuit: the right operand is only
+  evaluated when the left one doesn't already decide the result.
+- Negative integer literals in `match` patterns (`-1 => { ... }`).
+
+## Precedence, lowest to highest
+`||`, `&&`, `== !=`, `< > <= >=`, `+ -`, `* / %`, unary `- !`,
+then postfix (`.field`, `[i]`, `?`, calls).
