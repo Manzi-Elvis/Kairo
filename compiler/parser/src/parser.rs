@@ -1,6 +1,6 @@
 use kairo_ast::{
     BinaryOp, EnumDecl, EnumVariant, Expr, FunctionDecl, MatchArm, Param, Pattern, Program, Stmt,
-    StructDecl,
+    StructDecl, UnaryOp,
 };
 use kairo_lexer::{Span, Token, TokenKind};
 
@@ -301,13 +301,17 @@ impl Parser {
         self.expect(&TokenKind::LBrace, "{")?;
         let then_branch = self.parse_block_stmts()?;
         self.expect(&TokenKind::RBrace, "}")?;
-
         let else_branch = if self.check(&TokenKind::Else) {
             self.advance();
-            self.expect(&TokenKind::LBrace, "{")?;
-            let stmts = self.parse_block_stmts()?;
-            self.expect(&TokenKind::RBrace, "}")?;
-            Some(stmts)
+            if self.check(&TokenKind::If) {
+                // `else if` is sugar for `else { if ... }`
+                Some(vec![self.parse_if_stmt()?])
+            } else {
+                self.expect(&TokenKind::LBrace, "{")?;
+                let stmts = self.parse_block_stmts()?;
+                self.expect(&TokenKind::RBrace, "}")?;
+                Some(stmts)
+            }
         } else {
             None
         };
@@ -357,6 +361,20 @@ impl Parser {
             TokenKind::IntLiteral(v) => {
                 self.advance();
                 Ok(Pattern::IntLiteral(v))
+            }
+            TokenKind::Minus => {
+                self.advance();
+                match self.peek_kind().clone() {
+                    TokenKind::IntLiteral(v) => {
+                        self.advance();
+                        Ok(Pattern::IntLiteral(-v))
+                    }
+                    other => Err(ParseError::UnexpectedToken {
+                        expected: "integer literal".to_string(),
+                        found: other,
+                        span: self.peek().span,
+                    }),
+                }
             }
             TokenKind::StringLiteral(v) => {
                 self.advance();
@@ -421,7 +439,27 @@ impl Parser {
     // --- expression parsing, lowest to highest precedence ---
 
     fn parse_expr(&mut self) -> Result<Expr, ParseError> {
-        self.parse_equality()
+        self.parse_or()
+    }
+
+    fn parse_or(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.parse_and()?;
+        while self.check(&TokenKind::OrOr) {
+            self.advance();
+            let right = self.parse_and()?;
+            left = Expr::Binary { left: Box::new(left), op: BinaryOp::Or, right: Box::new(right) };
+        }
+        Ok(left)
+    }
+
+    fn parse_and(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.parse_equality()?;
+        while self.check(&TokenKind::AndAnd) {
+            self.advance();
+            let right = self.parse_equality()?;
+            left = Expr::Binary { left: Box::new(left), op: BinaryOp::And, right: Box::new(right) };
+        }
+        Ok(left)
     }
 
     fn parse_equality(&mut self) -> Result<Expr, ParseError> {
@@ -484,22 +522,30 @@ impl Parser {
     }
 
     fn parse_factor(&mut self) -> Result<Expr, ParseError> {
-        let mut left = self.parse_postfix()?;
+        let mut left = self.parse_unary()?;
         loop {
             let op = match self.peek_kind() {
                 TokenKind::Star => BinaryOp::Mul,
                 TokenKind::Slash => BinaryOp::Div,
+                TokenKind::Percent => BinaryOp::Rem,
                 _ => break,
             };
             self.advance();
-            let right = self.parse_postfix()?;
-            left = Expr::Binary {
-                left: Box::new(left),
-                op,
-                right: Box::new(right),
-            };
+            let right = self.parse_unary()?;
+            left = Expr::Binary { left: Box::new(left), op, right: Box::new(right) };
         }
         Ok(left)
+    }
+
+    fn parse_unary(&mut self) -> Result<Expr, ParseError> {
+        let op = match self.peek_kind() {
+            TokenKind::Minus => UnaryOp::Neg,
+            TokenKind::Bang => UnaryOp::Not,
+            _ => return self.parse_postfix(),
+        };
+        self.advance();
+        let operand = self.parse_unary()?;
+        Ok(Expr::Unary { op, operand: Box::new(operand) })
     }
 
     /// Applies postfix field access (`.field`, chainable) on top of
@@ -1270,5 +1316,69 @@ mod tests {
         assert_eq!(program.imports, vec!["geometry".to_string()]);
         assert!(program.functions[0].is_exported);
         assert!(!program.functions[1].is_exported);
+    }
+
+    #[test]
+    fn parses_else_if_chain() {
+        let program =
+            parse("fn main() { if a { print(1) } else if b { print(2) } else { print(3) } }")
+                .unwrap();
+        let Stmt::If { else_branch, .. } = &program.functions[0].body[0] else {
+            panic!("expected If");
+        };
+        let else_stmts = else_branch.as_ref().unwrap();
+        assert_eq!(else_stmts.len(), 1);
+        assert!(matches!(else_stmts[0], Stmt::If { .. }));
+    }
+
+    #[test]
+    fn parses_unary_and_remainder_precedence() {
+        // -a % b parses as (-a) % b
+        let program = parse("fn main() { x := -a % b }").unwrap();
+        let Stmt::VariableDecl { value, .. } = &program.functions[0].body[0] else {
+            panic!("expected VariableDecl");
+        };
+        assert_eq!(
+            *value,
+            Expr::Binary {
+                left: Box::new(Expr::Unary {
+                    op: UnaryOp::Neg,
+                    operand: Box::new(Expr::Identifier("a".to_string())),
+                }),
+                op: BinaryOp::Rem,
+                right: Box::new(Expr::Identifier("b".to_string())),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_logical_operators_with_correct_precedence() {
+        // a || b && c parses as a || (b && c)
+        let program = parse("fn main() { x := a || b && c }").unwrap();
+        let Stmt::VariableDecl { value, .. } = &program.functions[0].body[0] else {
+            panic!("expected VariableDecl");
+        };
+        assert_eq!(
+            *value,
+            Expr::Binary {
+                left: Box::new(Expr::Identifier("a".to_string())),
+                op: BinaryOp::Or,
+                right: Box::new(Expr::Binary {
+                    left: Box::new(Expr::Identifier("b".to_string())),
+                    op: BinaryOp::And,
+                    right: Box::new(Expr::Identifier("c".to_string())),
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_negative_int_pattern() {
+        let program =
+            parse("fn main() { match x { -1 => { print(1) } _ => { print(2) } } }").unwrap();
+        let Stmt::Match { arms, .. } = &program.functions[0].body[0] else {
+            panic!("expected Match");
+        };
+        assert_eq!(arms[0].pattern, Pattern::IntLiteral(-1));
     }
 }
