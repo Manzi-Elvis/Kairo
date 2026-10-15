@@ -1,5 +1,5 @@
 use kairo_ast::{
-    BinaryOp, EnumDecl, Expr, FunctionDecl, MatchArm, Pattern, Program, Stmt, StructDecl,
+    BinaryOp, EnumDecl, Expr, FunctionDecl, MatchArm, Pattern, Program, Stmt, StructDecl, UnaryOp,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -646,6 +646,23 @@ impl TypeChecker {
                 }
             }
             Expr::Try(inner) => self.check_try(inner, scope, errors),
+            Expr::Unary { op, operand } => {
+                let t = self.eval_expr_type(operand, scope, errors)?;
+                let (expected, symbol) = match op {
+                    UnaryOp::Neg => (Type::Int, "-"),
+                    UnaryOp::Not => (Type::Bool, "!"),
+                };
+                if t == expected {
+                    Some(t)
+                } else {
+                    errors.push(TypeError::Mismatch {
+                        expected: expected.name(),
+                        found: t.name(),
+                        context: format!("unary `{}`", symbol),
+                    });
+                    None
+                }
+            }
         }
     }
 
@@ -668,9 +685,17 @@ impl TypeChecker {
                     None
                 }
             },
-            Sub | Mul | Div => {
+            Sub | Mul | Div | Rem => {
                 if l == Type::Int && r == Type::Int {
                     Some(Type::Int)
+                } else {
+                    errors.push(binary_mismatch(op_symbol(op), &l, &r));
+                    None
+                }
+            }
+            And | Or => {
+                if l == Type::Bool && r == Type::Bool {
+                    Some(Type::Bool)
                 } else {
                     errors.push(binary_mismatch(op_symbol(op), &l, &r));
                     None
@@ -985,6 +1010,9 @@ fn op_symbol(op: BinaryOp) -> &'static str {
         Gt => ">",
         Le => "<=",
         Ge => ">=",
+        Rem => "%",
+        And => "&&",
+        Or => "||",
     }
 }
 
@@ -1280,5 +1308,23 @@ mod tests {
     fn inner_declarations_do_not_leak_out() {
         let err = check("fn main() { if true { y := 1 }\nprint(y) }").unwrap_err();
         assert!(err.contains(&TypeError::UndefinedVariable("y".to_string())));
+    }
+
+    #[test]
+    fn passes_remainder_unary_and_logical_operators() {
+        let source = "fn main() { a := 7 % 3\nb := -a\nc := !(a < b) && true || false\nprint(c) }";
+        assert_eq!(check(source), Ok(()));
+    }
+
+    #[test]
+    fn catches_negating_a_bool() {
+        let err = check("fn main() { x := -true }").unwrap_err();
+        assert!(err.iter().any(|e| matches!(e, TypeError::Mismatch { .. })));
+    }
+
+    #[test]
+    fn catches_logical_operator_on_ints() {
+        let err = check("fn main() { x := 1 && 2 }").unwrap_err();
+        assert!(err.iter().any(|e| matches!(e, TypeError::Mismatch { .. })));
     }
 }

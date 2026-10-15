@@ -1,0 +1,29 @@
+fn classify(n: Int) -> String {
+    if n < 0 {
+        return "negative"
+    } else if n == 0 {
+        return "zero"
+    } else if n % 2 == 0 {
+        return "even"
+    } else {
+        return "odd"
+    }
+}
+
+fn safeDivide(a: Int, b: Int) -> Int {
+    if b != 0 && a / b > 1 {
+        return a / b
+    }
+    return 0
+}
+
+fn main() {
+    print(classify(-4))
+    print(classify(0))
+    print(classify(10))
+    print(classify(7))
+    print(safeDivide(10, 0))
+    print(safeDivide(10, 2))
+    print(!(1 > 2) || false)
+    print(-(3 - 8))
+}

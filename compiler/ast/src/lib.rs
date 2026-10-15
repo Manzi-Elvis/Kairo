@@ -152,6 +152,7 @@ pub enum Expr {
     },
     /// `<expr>?` — propagates Err early, unwraps Ok
     Try(Box<Expr>),
+    Unary { op: UnaryOp, operand: Box<Expr> },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -166,4 +167,13 @@ pub enum BinaryOp {
     Gt,
     Le,
     Ge,
+    Rem,
+    And,
+    Or,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnaryOp {
+    Neg,
+    Not,
 }
