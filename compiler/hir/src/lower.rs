@@ -263,6 +263,10 @@ impl Lowerer {
                 index: Box::new(self.lower_expr(index)),
             },
             ast::Expr::Try(inner) => HExpr::Try(Box::new(self.lower_expr(inner))),
+            ast::Expr::Unary { op, operand } => HExpr::Unary {
+                op: *op,
+                operand: Box::new(self.lower_expr(operand)),
+            },
         }
     }
 }
@@ -369,5 +373,13 @@ mod tests {
             panic!("expected VariableDecl");
         };
         assert!(matches!(value, HExpr::Try(_)));
+    }
+    #[test]
+    fn lowers_unary_expression() {
+        let hir = lower_source("fn main() { x := -5 }");
+        let HStmt::VariableDecl { value, .. } = &hir.functions[0].body[0] else {
+            panic!("expected VariableDecl");
+        };
+        assert!(matches!(value, HExpr::Unary { .. }));
     }
 }
