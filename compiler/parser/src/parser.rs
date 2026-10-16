@@ -222,6 +222,9 @@ impl Parser {
         if self.check(&TokenKind::Return) {
             return self.parse_return_stmt();
         }
+        if self.check(&TokenKind::For) {
+            return self.parse_for_stmt();
+        }
 
         if let TokenKind::Identifier(_) = self.peek_kind() {
             match self.peek_at_kind(1) {
@@ -269,6 +272,28 @@ impl Parser {
 
         let expr = self.parse_expr()?;
         Ok(Stmt::Expr(expr))
+    }
+
+    fn parse_for_stmt(&mut self) -> Result<Stmt, ParseError> {
+        self.expect(&TokenKind::For, "for")?;
+        let var = self.expect_identifier()?;
+        self.expect(&TokenKind::In, "in")?;
+        // Same struct-literal restriction as if/while conditions.
+        let first = self.parse_condition()?;
+
+        if self.check(&TokenKind::DotDot) {
+            self.advance();
+            let end = self.parse_condition()?;
+            self.expect(&TokenKind::LBrace, "{")?;
+            let body = self.parse_block_stmts()?;
+            self.expect(&TokenKind::RBrace, "}")?;
+            Ok(Stmt::ForRange { var, start: first, end, body })
+        } else {
+            self.expect(&TokenKind::LBrace, "{")?;
+            let body = self.parse_block_stmts()?;
+            self.expect(&TokenKind::RBrace, "}")?;
+            Ok(Stmt::ForEach { var, iterable: first, body })
+        }
     }
 
     fn parse_mut_decl(&mut self) -> Result<Stmt, ParseError> {
@@ -1380,5 +1405,33 @@ mod tests {
             panic!("expected Match");
         };
         assert_eq!(arms[0].pattern, Pattern::IntLiteral(-1));
+    }
+
+    #[test]
+    fn parses_for_range_loop() {
+        let program = parse("fn main() { for i in 0..3 { print(i) } }").unwrap();
+        assert_eq!(
+            program.functions[0].body[0],
+            Stmt::ForRange {
+                var: "i".to_string(),
+                start: Expr::IntLiteral(0),
+                end: Expr::IntLiteral(3),
+                body: vec![Stmt::Expr(Expr::Call {
+                    callee: "print".to_string(),
+                    args: vec![Expr::Identifier("i".to_string())],
+                })],
+            }
+        );
+    }
+
+    #[test]
+    fn parses_for_each_loop() {
+        let program = parse("fn main() { for x in items { print(x) } }").unwrap();
+        let Stmt::ForEach { var, iterable, body } = &program.functions[0].body[0] else {
+            panic!("expected ForEach");
+        };
+        assert_eq!(var, "x");
+        assert_eq!(*iterable, Expr::Identifier("items".to_string()));
+        assert_eq!(body.len(), 1);
     }
 }

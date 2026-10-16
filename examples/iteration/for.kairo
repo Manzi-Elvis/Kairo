@@ -1,0 +1,41 @@
+fn sumTo(n: Int) -> Int {
+    mut total := 0
+    for i in 1..n + 1 {
+        total = total + i
+    }
+    return total
+}
+
+fn isPrime(n: Int) -> Bool {
+    if n < 2 {
+        return false
+    }
+    for d in 2..n {
+        if d * d > n {
+            return true
+        }
+        if n % d == 0 {
+            return false
+        }
+    }
+    return true
+}
+
+fn main() {
+    print(sumTo(10))
+
+    names := ["Ada", "Grace", "Linus"]
+    for name in names {
+        print("Hello, " + name + "!")
+    }
+
+    mut found := 0
+    for n in 1..30 {
+        if isPrime(n) {
+            found = found + 1
+        }
+    }
+    print(found)
+    print("tab\tseparated")
+    print("line one\nline two")
+}

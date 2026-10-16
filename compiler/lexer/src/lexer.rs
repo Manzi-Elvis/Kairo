@@ -12,6 +12,11 @@ pub enum LexError {
         line: usize,
         column: usize,
     },
+    InvalidEscape {
+        ch: char,
+        line: usize,
+        column: usize 
+    },
 }
 
 pub struct Lexer {
@@ -131,6 +136,8 @@ impl Lexer {
             "module" => TokenKind::Module,
             "import" => TokenKind::Import,
             "export" => TokenKind::Export,
+            "for" => TokenKind::For,
+            "in" => TokenKind::In,
             _ => TokenKind::Identifier(ident),
         }
     }
@@ -152,7 +159,7 @@ impl Lexer {
     fn lex_string(&mut self) -> Result<TokenKind, LexError> {
         let start_line = self.line;
         let start_col = self.column;
-        self.advance(); // consume opening quote
+        self.advance(); // opening quote
 
         let mut value = String::new();
         loop {
@@ -166,6 +173,30 @@ impl Lexer {
                 Some('"') => {
                     self.advance();
                     break;
+                }
+                Some('\\') => {
+                    let (esc_line, esc_col) = (self.line, self.column);
+                    self.advance();
+                    match self.advance() {
+                        Some('n') => value.push('\n'),
+                        Some('t') => value.push('\t'),
+                        Some('r') => value.push('\r'),
+                        Some('\\') => value.push('\\'),
+                        Some('"') => value.push('"'),
+                        Some(other) => {
+                            return Err(LexError::InvalidEscape {
+                                ch: other,
+                                line: esc_line,
+                                column: esc_col,
+                            })
+                        }
+                        None => {
+                            return Err(LexError::UnterminatedString {
+                                line: start_line,
+                                column: start_col,
+                            })
+                        }
+                    }
                 }
                 Some(c) => {
                     value.push(c);
@@ -187,6 +218,10 @@ impl Lexer {
             '{' => Ok(TokenKind::LBrace),
             '}' => Ok(TokenKind::RBrace),
             ',' => Ok(TokenKind::Comma),
+            '.' if self.peek() == Some('.') => {
+                self.advance();
+                Ok(TokenKind::DotDot)
+            }
             '.' => Ok(TokenKind::Dot),
             '+' => Ok(TokenKind::Plus),
             '-' if self.peek() == Some('>') => {
@@ -560,5 +595,39 @@ mod tests {
                 TokenKind::Eof,
             ]
         );
+    }
+
+    #[test]
+    fn tokenizes_for_in_and_range() {
+        let kinds = kinds("for i in 0..n { }");
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::For,
+                TokenKind::Identifier("i".into()),
+                TokenKind::In,
+                TokenKind::IntLiteral(0),
+                TokenKind::DotDot,
+                TokenKind::Identifier("n".into()),
+                TokenKind::LBrace,
+                TokenKind::RBrace,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn decodes_string_escapes() {
+        let kinds = kinds(r#""a\nb\t\"q\"\\""#);
+        assert_eq!(
+            kinds,
+            vec![TokenKind::StringLiteral("a\nb\t\"q\"\\".into()), TokenKind::Eof]
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_escape() {
+        let err = Lexer::new(r#""bad\q""#).tokenize().unwrap_err();
+        assert!(matches!(err, LexError::InvalidEscape { ch: 'q', .. }));
     }
 }

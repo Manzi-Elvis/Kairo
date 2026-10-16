@@ -112,6 +112,10 @@ pub enum Stmt {
     },
     /// `return <expr>` or bare `return`
     Return(Option<Expr>),
+    /// `for <var> in <start>..<end> { ... }` (end is exclusive)
+    ForRange { var: String, start: Expr, end: Expr, body: Vec<Stmt> },
+    /// `for <var> in <array> { ... }`
+    ForEach { var: String, iterable: Expr, body: Vec<Stmt> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
