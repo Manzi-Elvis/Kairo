@@ -1696,4 +1696,17 @@ mod tests {
         assert!(ir.contains("logrhs1:"));
         assert!(ir.contains("logend1:"));
     }
+
+    #[test]
+    fn generates_for_loop_as_while() {
+        let ir = gen_source("fn main() { for i in 0..3 { print(i) } }").unwrap();
+        assert!(ir.contains("whilecond1:"));
+        assert!(ir.contains("%__for_i_"));
+    }
+
+    #[test]
+    fn escapes_newlines_in_string_constants() {
+        let ir = gen_source(r#"fn main() { print("a\nb") }"#).unwrap();
+        assert!(ir.contains(r"a\0Ab"));
+    }
 }

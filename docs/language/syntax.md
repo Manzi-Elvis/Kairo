@@ -615,3 +615,24 @@ Every `{ ... }` block is now its own scope.
 ## Precedence, lowest to highest
 `||`, `&&`, `== !=`, `< > <= >=`, `+ -`, `* / %`, unary `- !`,
 then postfix (`.field`, `[i]`, `?`, calls).
+
+
+---
+
+# Kairo v0.25: `for` loops and string escapes
+
+## `for` loops
+- `for i in 0..n { ... }` loops `i` over `0, 1, ..., n-1`. The end is
+  exclusive, and both bounds are evaluated once, before the loop.
+- `for x in array { ... }` loops over the elements of an array.
+- The loop variable is a fresh, immutable binding on every iteration,
+  and it is scoped to the loop body.
+- `return` works inside a loop. There is no `break` or `continue` yet.
+- `for` and `in` are now reserved words.
+
+Loops are desugared to `while` loops in HIR, so the interpreter and
+native compiler share one implementation.
+
+## String escapes
+`\n`, `\t`, `\r`, `\\` and `\"` are recognized inside string
+literals. Any other escape is a lex error.

@@ -54,6 +54,9 @@ pub enum TokenKind {
     LBracket, // [
     RBracket, // ]
     Question, // ?
+    For,
+    In,
+    DotDot, // ..
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

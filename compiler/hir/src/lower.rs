@@ -106,6 +106,12 @@ impl Lowerer {
                 vec![HStmt::Return(expr.as_ref().map(|e| self.lower_expr(e)))]
             }
             ast::Stmt::Match { scrutinee, arms } => self.lower_match(scrutinee, arms),
+            ast::Stmt::ForRange { var, start, end, body } => {
+                self.lower_for_range(var, start, end, body)
+            }
+            ast::Stmt::ForEach { var, iterable, body } => {
+                self.lower_for_each(var, iterable, body)
+            }
         }
     }
 
@@ -269,6 +275,113 @@ impl Lowerer {
             },
         }
     }
+
+    fn fresh_name(&mut self, prefix: &str) -> String {
+        self.temp_counter += 1;
+        format!("__{prefix}_{}", self.temp_counter)
+    }
+
+    fn increment(idx: &str) -> HStmt {
+        HStmt::Assign {
+            name: idx.to_string(),
+            value: HExpr::Binary {
+                left: Box::new(HExpr::Identifier(idx.to_string())),
+                op: ast::BinaryOp::Add,
+                right: Box::new(HExpr::IntLiteral(1)),
+            },
+        }
+    }
+
+    /// for v in a..b { body }  becomes
+    ///   mut i := a;  end := b
+    ///   while i < end { v := i; body; i = i + 1 }
+    fn lower_for_range(
+        &mut self,
+        var: &str,
+        start: &ast::Expr,
+        end: &ast::Expr,
+        body: &[ast::Stmt],
+    ) -> Vec<HStmt> {
+        let idx = self.fresh_name("for_i");
+        let end_name = self.fresh_name("for_end");
+
+        let mut loop_body = vec![HStmt::VariableDecl {
+            name: var.to_string(),
+            value: HExpr::Identifier(idx.clone()),
+            is_mutable: false,
+        }];
+        loop_body.extend(self.lower_stmts(body));
+        loop_body.push(Self::increment(&idx));
+
+        vec![
+            HStmt::VariableDecl {
+                name: idx.clone(),
+                value: self.lower_expr(start),
+                is_mutable: true,
+            },
+            HStmt::VariableDecl {
+                name: end_name.clone(),
+                value: self.lower_expr(end),
+                is_mutable: false,
+            },
+            HStmt::While {
+                condition: HExpr::Binary {
+                    left: Box::new(HExpr::Identifier(idx)),
+                    op: ast::BinaryOp::Lt,
+                    right: Box::new(HExpr::Identifier(end_name)),
+                },
+                body: loop_body,
+            },
+        ]
+    }
+
+    /// for v in arr { body }  becomes
+    ///   a := arr;  mut i := 0
+    ///   while i < len(a) { v := a[i]; body; i = i + 1 }
+    fn lower_for_each(
+        &mut self,
+        var: &str,
+        iterable: &ast::Expr,
+        body: &[ast::Stmt],
+    ) -> Vec<HStmt> {
+        let arr = self.fresh_name("for_arr");
+        let idx = self.fresh_name("for_i");
+
+        let mut loop_body = vec![HStmt::VariableDecl {
+            name: var.to_string(),
+            value: HExpr::Index {
+                array: Box::new(HExpr::Identifier(arr.clone())),
+                index: Box::new(HExpr::Identifier(idx.clone())),
+            },
+            is_mutable: false,
+        }];
+        loop_body.extend(self.lower_stmts(body));
+        loop_body.push(Self::increment(&idx));
+
+        vec![
+            HStmt::VariableDecl {
+                name: arr.clone(),
+                value: self.lower_expr(iterable),
+                is_mutable: false,
+            },
+            HStmt::VariableDecl {
+                name: idx.clone(),
+                value: HExpr::IntLiteral(0),
+                is_mutable: true,
+            },
+            HStmt::While {
+                condition: HExpr::Binary {
+                    left: Box::new(HExpr::Identifier(idx)),
+                    op: ast::BinaryOp::Lt,
+                    right: Box::new(HExpr::Call {
+                        callee: "len".to_string(),
+                        args: vec![HExpr::Identifier(arr)],
+                    }),
+                },
+                body: loop_body,
+            },
+        ]
+    }
 }
 
 #[cfg(test)]
@@ -374,6 +487,7 @@ mod tests {
         };
         assert!(matches!(value, HExpr::Try(_)));
     }
+    
     #[test]
     fn lowers_unary_expression() {
         let hir = lower_source("fn main() { x := -5 }");
@@ -381,5 +495,24 @@ mod tests {
             panic!("expected VariableDecl");
         };
         assert!(matches!(value, HExpr::Unary { .. }));
+    }
+
+    #[test]
+    fn lowers_for_range_to_while() {
+        let hir = lower_source("fn main() { for i in 0..3 { print(i) } }");
+        let body = &hir.functions[0].body;
+        assert_eq!(body.len(), 3); // index decl, end decl, while
+        let HStmt::While { body: loop_body, .. } = &body[2] else {
+            panic!("expected While");
+        };
+        assert_eq!(loop_body.len(), 3); // loop var, user body, increment
+    }
+
+    #[test]
+    fn lowers_for_each_to_indexed_while() {
+        let hir = lower_source("fn main() { a := [1, 2]\nfor x in a { print(x) } }");
+        let body = &hir.functions[0].body;
+        assert_eq!(body.len(), 4); // a, array copy, index, while
+        assert!(matches!(body[3], HStmt::While { .. }));
     }
 }

@@ -351,6 +351,47 @@ impl TypeChecker {
                 }
                 scope.pop();
             }
+            Stmt::ForRange { var, start, end, body } => {
+                for (label, bound) in [("start", start), ("end", end)] {
+                    if let Some(t) = self.eval_expr_type(bound, scope, errors) {
+                        if t != Type::Int {
+                            errors.push(TypeError::Mismatch {
+                                expected: "Int".to_string(),
+                                found: t.name(),
+                                context: format!("range {label}"),
+                            });
+                        }
+                    }
+                }
+                scope.push();
+                scope.insert(var.clone(), (Type::Int, false));
+                for s in body {
+                    self.check_stmt(s, scope, return_type, errors);
+                }
+                scope.pop();
+            }
+            Stmt::ForEach { var, iterable, body } => {
+                let element = match self.eval_expr_type(iterable, scope, errors) {
+                    Some(Type::Array(inner)) => Some(*inner),
+                    Some(other) => {
+                        errors.push(TypeError::Mismatch {
+                            expected: "Array".to_string(),
+                            found: other.name(),
+                            context: "for loop iterable".to_string(),
+                        });
+                        None
+                    }
+                    None => None,
+                };
+                scope.push();
+                if let Some(t) = element {
+                    scope.insert(var.clone(), (t, false));
+                }
+                for s in body {
+                    self.check_stmt(s, scope, return_type, errors);
+                }
+                scope.pop();
+            }
 
             Stmt::Match { scrutinee, arms } => {
                 if let Some(scrutinee_type) = self.eval_expr_type(scrutinee, scope, errors) {
@@ -1326,5 +1367,29 @@ mod tests {
     fn catches_logical_operator_on_ints() {
         let err = check("fn main() { x := 1 && 2 }").unwrap_err();
         assert!(err.iter().any(|e| matches!(e, TypeError::Mismatch { .. })));
+    }
+
+    #[test]
+    fn passes_valid_for_loops() {
+        let source = "fn main() {\n a := [1, 2, 3]\n for x in a { print(x) }\n for i in 0..len(a) { print(i) }\n}";
+        assert_eq!(check(source), Ok(()));
+    }
+
+    #[test]
+    fn catches_for_range_with_non_int_bound() {
+        let err = check("fn main() { for i in 0..true { print(i) } }").unwrap_err();
+        assert!(err.iter().any(|e| matches!(e, TypeError::Mismatch { .. })));
+    }
+
+    #[test]
+    fn catches_for_each_over_non_array() {
+        let err = check("fn main() { for x in 5 { print(x) } }").unwrap_err();
+        assert!(err.iter().any(|e| matches!(e, TypeError::Mismatch { .. })));
+    }
+
+    #[test]
+    fn for_loop_variable_does_not_leak() {
+        let err = check("fn main() { for i in 0..2 { print(i) }\nprint(i) }").unwrap_err();
+        assert!(err.contains(&TypeError::UndefinedVariable("i".to_string())));
     }
 }
