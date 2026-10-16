@@ -276,6 +276,21 @@ impl<'a> Checker<'a> {
                 }
                 Ok(())
             }
+            ForRange { start, end, body, .. } => {
+                self.check_expr(start, current)?;
+                self.check_expr(end, current)?;
+                for s in body {
+                    self.check_stmt(s, current)?;
+                }
+                Ok(())
+            }
+            ForEach { iterable, body, .. } => {
+                self.check_expr(iterable, current)?;
+                for s in body {
+                    self.check_stmt(s, current)?;
+                }
+                Ok(())
+            }
         }
     }
 }
