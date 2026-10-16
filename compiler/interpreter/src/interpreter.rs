@@ -996,4 +996,49 @@ mod tests {
             vec!["A".to_string(), "B".to_string(), "C".to_string()]
         );
     }
+
+    #[test]
+    fn runs_for_range_and_for_each_loops() {
+        let source = r#"
+            fn main() {
+                mut total := 0
+                for i in 1..4 { total = total + i }
+                print(total)
+                for word in ["a", "b"] { print(word) }
+            }
+        "#;
+        assert_eq!(
+            run_and_capture(source).unwrap(),
+            vec!["6".to_string(), "a".to_string(), "b".to_string()]
+        );
+    }
+
+    #[test]
+    fn return_inside_for_loop_exits_the_function() {
+        let source = r#"
+            fn find(n: Int) -> Int {
+                for i in 0..10 {
+                    if i * i > n { return i }
+                }
+                return -1
+            }
+            fn main() {
+                print(find(20))
+                print(find(1000))
+            }
+        "#;
+        assert_eq!(
+            run_and_capture(source).unwrap(),
+            vec!["5".to_string(), "-1".to_string()]
+        );
+    }
+
+    #[test]
+    fn prints_strings_with_escapes() {
+        let source = r#"fn main() { print("a\tb\"c\"") }"#;
+        assert_eq!(
+            run_and_capture(source).unwrap(),
+            vec!["a\tb\"c\"".to_string()]
+        );
+    }
 }
