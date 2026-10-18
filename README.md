@@ -1,16 +1,16 @@
 <div align="center">
 
-# ⚡ KAIRO
+# âš¡ KAIRO
 
 ### A programming language built from curiosity, engineered with intent.
 
 <p>
   <strong>Fast.</strong>
-  &nbsp;·&nbsp;
+  &nbsp;Â·&nbsp;
   <strong>Safe.</strong>
-  &nbsp;·&nbsp;
+  &nbsp;Â·&nbsp;
   <strong>Expressive.</strong>
-  &nbsp;·&nbsp;
+  &nbsp;Â·&nbsp;
   <strong>Still being forged.</strong>
 </p>
 
@@ -35,22 +35,22 @@
 <br />
 <br />
 
-> **Kairo is an experimental programming language I'm building from the ground up — one lexer, one parser, one compiler pass, and one crazy idea at a time.**
+> **Kairo is an experimental programming language I'm building from the ground up â€” one lexer, one parser, one compiler pass, and one crazy idea at a time.**
 
 <br />
 
 <a href="#-what-is-kairo">What is Kairo?</a>
-&nbsp; • &nbsp;
+&nbsp; â€¢ &nbsp;
 <a href="#-why-kairo">Why Kairo?</a>
-&nbsp; • &nbsp;
+&nbsp; â€¢ &nbsp;
 <a href="#-quick-start">Quick Start</a>
-&nbsp; • &nbsp;
+&nbsp; â€¢ &nbsp;
 <a href="#-language">Language</a>
-&nbsp; • &nbsp;
+&nbsp; â€¢ &nbsp;
 <a href="#-architecture">Architecture</a>
-&nbsp; • &nbsp;
+&nbsp; â€¢ &nbsp;
 <a href="#-roadmap">Roadmap</a>
-&nbsp; • &nbsp;
+&nbsp; â€¢ &nbsp;
 <a href="#-contributing">Contributing</a>
 
 </div>
@@ -81,26 +81,26 @@
 - [ Your First Kairo Program](#-your-first-kairo-program)
 - [ The Language](#-the-language)
 - [ Language Building Blocks](#-language-building-blocks)
-- [ How Kairo Works](#️-how-kairo-works)
-- [ Compiler Architecture](#️-compiler-architecture)
+- [ How Kairo Works](#ï¸-how-kairo-works)
+- [ Compiler Architecture](#ï¸-compiler-architecture)
 - [ Project Structure](#-project-structure)
-- [ Roadmap](#️-roadmap)
+- [ Roadmap](#ï¸-roadmap)
 - [ Development Status](#-development-status)
 - [ Testing](#-testing)
 - [ Performance](#-performance)
-- [ Tooling](#️-tooling)
+- [ Tooling](#ï¸-tooling)
 - [ Documentation](#-documentation)
 - [ Contributing](#-contributing)
 - [ Ideas & Language Design](#-ideas--language-design)
 - [ Reporting Bugs](#-reporting-bugs)
 - [ Community](#-community)
-- [ Why Contribute?](#️-why-contribute)
+- [ Why Contribute?](#ï¸-why-contribute)
 - [ About the Creator](#-about-the-creator)
 - [ License](#-license)
 
 ---
 
-# ⚡ What is Kairo?
+# âš¡ What is Kairo?
 
 **Kairo** is an experimental programming language being designed and implemented from scratch.
 
@@ -114,29 +114,29 @@ Kairo explores the entire journey of a programming language:
 
 ```text
 Source Code
-     │
-     ▼
+     â”‚
+     â–¼
    Lexer
-     │
-     ▼
+     â”‚
+     â–¼
    Parser
-     │
-     ▼
+     â”‚
+     â–¼
     AST
-     │
-     ▼
+     â”‚
+     â–¼
  Semantic Analysis
-     │
-     ▼
+     â”‚
+     â–¼
  Intermediate Representation
-     │
-     ▼
+     â”‚
+     â–¼
  Optimization
-     │
-     ▼
+     â”‚
+     â–¼
  Code Generation
-     │
-     ▼
+     â”‚
+     â–¼
  Executable
 ```
 
@@ -148,7 +148,7 @@ And every mistake teaches me something about language design.
 
 ---
 
-# 💭 Why Kairo?
+# ðŸ’­ Why Kairo?
 
 There are already incredible programming languages.
 
@@ -218,13 +218,13 @@ The long-term goal is a language capable of growing from:
 
 ```text
 tiny scripts
-     ↓
+     â†“
 CLI tools
-     ↓
+     â†“
 applications
-     ↓
+     â†“
 services
-     ↓
+     â†“
 systems software
 ```
 
@@ -234,7 +234,7 @@ Complexity is sometimes necessary.
 
 Unnecessary complexity isn't.
 
-### 🔬 Experimentation
+### ðŸ”¬ Experimentation
 
 Kairo is also a laboratory.
 
@@ -275,7 +275,7 @@ Kairo earns them one feature at a time.
 
 <div align="center">
 
-### 🚧 Kairo is being forged.
+### ðŸš§ Kairo is being forged.
 
 **Current stage:** Experimental compiler / language development
 
@@ -289,17 +289,17 @@ That means:
 
 ```text
         Syntax
-          ↓
+          â†“
         Lexer
-          ↓
+          â†“
         Parser
-          ↓
+          â†“
          AST
-          ↓
+          â†“
     Semantic Analysis
-          ↓
+          â†“
        Codegen
-          ↓
+          â†“
      Native Program
 ```
 
@@ -367,7 +367,7 @@ No 14-line configuration file required just to say hello.
 
 ---
 
-# 📖 The Language
+# ðŸ“– The Language
 
 Kairo's syntax is intentionally being developed around familiar programming concepts while leaving room for its own identity.
 
@@ -509,7 +509,7 @@ flowchart TD
 
 The idea is simple:
 
-**source code goes in → executable software comes out.**
+**source code goes in â†’ executable software comes out.**
 
 The interesting part is everything between those two points.
 
@@ -575,10 +575,10 @@ Conceptually:
 
 ```text
 VariableDeclaration
-├── name: x
-└── value
-    └── IntegerLiteral
-        └── 10
+â”œâ”€â”€ name: x
+â””â”€â”€ value
+    â””â”€â”€ IntegerLiteral
+        â””â”€â”€ 10
 ```
 
 ---
@@ -607,13 +607,13 @@ That's where intermediate representations come in.
 
 ```text
 Kairo
-  ↓
+  â†“
 AST
-  ↓
+  â†“
 IR
-  ↓
+  â†“
 Optimized IR
-  ↓
+  â†“
 Machine Code
 ```
 
@@ -643,18 +643,18 @@ A conceptual view:
 
 ```text
 Kairo/
-│
-├── src/                 # Compiler implementation
-│
-├── examples/            # Kairo programs
-│
-├── tests/               # Compiler and language tests
-│
-├── docs/                # Language & compiler documentation
-│
-├── README.md
-├── LICENSE
-└── Cargo.toml
+â”‚
+â”œâ”€â”€ src/                 # Compiler implementation
+â”‚
+â”œâ”€â”€ examples/            # Kairo programs
+â”‚
+â”œâ”€â”€ tests/               # Compiler and language tests
+â”‚
+â”œâ”€â”€ docs/                # Language & compiler documentation
+â”‚
+â”œâ”€â”€ README.md
+â”œâ”€â”€ LICENSE
+â””â”€â”€ Cargo.toml
 ```
 
 The structure will change when the project needs it to.
@@ -667,7 +667,7 @@ I'd rather evolve the architecture than preserve a pretty folder tree forever.
 
 Kairo is being built in stages.
 
-## Phase 01 — Foundation
+## Phase 01 â€” Foundation
 
 - [x] Project bootstrap
 - [x] Compiler skeleton
@@ -678,7 +678,7 @@ Kairo is being built in stages.
 - [ ] Expand diagnostics
 - [ ] Expand test coverage
 
-## Phase 02 — Language Core
+## Phase 02 â€” Language Core
 
 - [ ] Variables
 - [ ] Functions
@@ -688,7 +688,7 @@ Kairo is being built in stages.
 - [ ] Modules
 - [ ] Error handling
 
-## Phase 03 — Compiler
+## Phase 03 â€” Compiler
 
 - [ ] Intermediate representation
 - [ ] Semantic analysis
@@ -697,7 +697,7 @@ Kairo is being built in stages.
 - [ ] Better compiler diagnostics
 - [ ] Cross-platform compilation
 
-## Phase 04 — Runtime & Standard Library
+## Phase 04 â€” Runtime & Standard Library
 
 - [ ] Runtime
 - [ ] Strings
@@ -706,7 +706,7 @@ Kairo is being built in stages.
 - [ ] Networking
 - [ ] Standard library
 
-## Phase 05 — Concurrency
+## Phase 05 â€” Concurrency
 
 - [ ] Tasks
 - [ ] Channels
@@ -714,7 +714,7 @@ Kairo is being built in stages.
 - [ ] Async execution model
 - [ ] Structured concurrency
 
-## Phase 06 — Developer Experience
+## Phase 06 â€” Developer Experience
 
 - [ ] Kairo CLI
 - [ ] REPL
@@ -724,7 +724,7 @@ Kairo is being built in stages.
 - [ ] Debugging support
 - [ ] Better error messages
 
-## Phase 07 — Ecosystem
+## Phase 07 â€” Ecosystem
 
 - [ ] Package manager
 - [ ] Package registry
@@ -733,20 +733,20 @@ Kairo is being built in stages.
 - [ ] Community packages
 - [ ] Contributor ecosystem
 
-## Phase 08 — The Big One
+## Phase 08 â€” The Big One
 
 ```text
         Kairo
-          │
-     ┌────┴────┐
-     ▼         ▼
+          â”‚
+     â”Œâ”€â”€â”€â”€â”´â”€â”€â”€â”€â”
+     â–¼         â–¼
  Compiler    Ecosystem
-     │         │
-     ▼         ▼
+     â”‚         â”‚
+     â–¼         â–¼
  Runtime    Packages
-     │         │
-     └────┬────┘
-          ▼
+     â”‚         â”‚
+     â””â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”˜
+          â–¼
      Production
       Software
 ```
@@ -757,24 +757,24 @@ Eventually:
 
 ---
 
-# 📊 Development Status
+# ðŸ“Š Development Status
 
 | Component | Status |
 |---|---|
-| Project foundation | 🟢 Active |
-| Lexer | 🟢 Active |
-| Parser | 🟢 Active |
-| AST | 🟢 Active |
-| Language design | 🟡 Evolving |
-| Semantic analysis | 🟡 Developing |
-| Type system | 🟡 Planned / evolving |
-| Native code generation | 🟡 Developing |
-| Standard library | 🔴 Planned |
-| Package manager | 🔴 Planned |
-| LSP | 🔴 Planned |
-| VS Code extension | 🔴 Planned |
-| Playground | 🔴 Planned |
-| Production readiness | 🔴 Not yet |
+| Project foundation | ðŸŸ¢ Active |
+| Lexer | ðŸŸ¢ Active |
+| Parser | ðŸŸ¢ Active |
+| AST | ðŸŸ¢ Active |
+| Language design | ðŸŸ¡ Evolving |
+| Semantic analysis | ðŸŸ¡ Developing |
+| Type system | ðŸŸ¡ Planned / evolving |
+| Native code generation | ðŸŸ¡ Developing |
+| Standard library | ðŸ”´ Planned |
+| Package manager | ðŸ”´ Planned |
+| LSP | ðŸ”´ Planned |
+| VS Code extension | ðŸ”´ Planned |
+| Playground | ðŸ”´ Planned |
+| Production readiness | ðŸ”´ Not yet |
 
 **Kairo is not production-ready.**
 
@@ -792,17 +792,17 @@ The goal is to test:
 
 ```text
 Source
-  ↓
+  â†“
 Lexing
-  ↓
+  â†“
 Parsing
-  ↓
+  â†“
 AST
-  ↓
+  â†“
 Semantic Analysis
-  ↓
+  â†“
 Code Generation
-  ↓
+  â†“
 Execution
 ```
 
@@ -816,7 +816,7 @@ As the language grows, the test suite will become executable documentation for K
 
 ---
 
-# ⚡ Performance
+# âš¡ Performance
 
 Performance matters.
 
@@ -855,31 +855,31 @@ The Kairo tooling vision includes:
 
 ```text
 kairo
-│
-├── build
-├── run
-├── test
-├── fmt
-├── check
-├── repl
-├── doc
-└── package
+â”‚
+â”œâ”€â”€ build
+â”œâ”€â”€ run
+â”œâ”€â”€ test
+â”œâ”€â”€ fmt
+â”œâ”€â”€ check
+â”œâ”€â”€ repl
+â”œâ”€â”€ doc
+â””â”€â”€ package
 ```
 
 Eventually:
 
 ```text
 Editor
-  │
-  ▼
+  â”‚
+  â–¼
 Language Server
-  │
-  ├── autocomplete
-  ├── diagnostics
-  ├── go-to-definition
-  ├── rename
-  ├── hover
-  └── formatting
+  â”‚
+  â”œâ”€â”€ autocomplete
+  â”œâ”€â”€ diagnostics
+  â”œâ”€â”€ go-to-definition
+  â”œâ”€â”€ rename
+  â”œâ”€â”€ hover
+  â””â”€â”€ formatting
 ```
 
 The compiler is the beginning.
@@ -918,7 +918,7 @@ Why Kairo works the way it does.
 
 ---
 
-# 💡 Ideas & Language Design
+# ðŸ’¡ Ideas & Language Design
 
 This is one of the most important parts of Kairo.
 
@@ -1006,7 +1006,7 @@ Before contributing, please read:
 
 ---
 
-# 🌍 Community
+# ðŸŒ Community
 
 Kairo is being built in public.
 
@@ -1014,19 +1014,19 @@ That means the community isn't something I want to add **after** the language is
 
 The community should help shape what Kairo becomes.
 
-### 💬 Discussions
+### ðŸ’¬ Discussions
 
 Have an idea?
 
 Start a discussion.
 
-### 🐛 Issues
+### ðŸ› Issues
 
 Found something broken?
 
 Open an issue.
 
-### 🔧 Pull Requests
+### ðŸ”§ Pull Requests
 
 Want to fix something?
 
@@ -1040,7 +1040,7 @@ Let's talk about it.
 
 ---
 
-# ❤️ Why Contribute?
+# â¤ï¸ Why Contribute?
 
 Because you can literally say:
 
@@ -1052,21 +1052,21 @@ But more importantly, Kairo is an opportunity to learn things that most applicat
 
 ```text
 Compilers
-   ↓
+   â†“
 Parsing
-   ↓
+   â†“
 Type Systems
-   ↓
+   â†“
 Memory
-   ↓
+   â†“
 IR
-   ↓
+   â†“
 Code Generation
-   ↓
+   â†“
 Runtime Design
-   ↓
+   â†“
 Operating Systems
-   ↓
+   â†“
 Hardware
 ```
 
@@ -1154,15 +1154,15 @@ Kairo is one of those questions.
 
 If you're interested in programming languages, compilers, systems programming, or just watching a crazy idea become real:
 
-### ⭐ Star the repository
+### â­ Star the repository
 
-### 👀 Watch the project
+### ðŸ‘€ Watch the project
 
-### 💬 Join the discussions
+### ðŸ’¬ Join the discussions
 
-### 🔧 Contribute
+### ðŸ”§ Contribute
 
-### 📣 Tell someone about Kairo
+### ðŸ“£ Tell someone about Kairo
 
 Every star, issue, discussion, pull request, and idea helps.
 
@@ -1170,7 +1170,7 @@ Every star, issue, discussion, pull request, and idea helps.
 
 <div align="center">
 
-# ⚡ Kairo
+# âš¡ Kairo
 
 ### The language is young.
 
@@ -1191,6 +1191,6 @@ Still being forged.**
 <br />
 <br />
 
-<sub>© MANZI RURANGIRWA Elvis · Kairo Programming Language</sub>
+<sub>Â© MANZI RURANGIRWA Elvis Â· Kairo Programming Language</sub>
 
 </div>
