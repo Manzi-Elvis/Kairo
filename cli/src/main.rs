@@ -1,4 +1,4 @@
-use kairo_codegen::generate;
+use kairo_codegen::{generate, RUNTIME_C};
 use kairo_hir::lower_program;
 use kairo_interpreter::Interpreter;
 use kairo_loader::{load_program, LoadError, ModuleSource};
@@ -117,12 +117,19 @@ fn build_command(args: &[String]) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    let runtime_path = std::env::temp_dir().join(format!("kairo_runtime_{}.c", std::process::id()));
+    if let Err(e) = std::fs::write(&runtime_path, RUNTIME_C) {
+        eprintln!("error: could not write `{}`: {e}", runtime_path.display());
+        return ExitCode::FAILURE;
+    }
+
     let status = std::process::Command::new("clang")
         .arg(&ll_path)
+        .arg(&runtime_path)
         .arg("-o")
         .arg(&exe_path)
         .status();
-
+    let _ = std::fs::remove_file(&runtime_path);
     match status {
         Ok(s) if s.success() => {
             println!("built {}", exe_path.display());

@@ -1,0 +1,21 @@
+fn parseOr(text: String, fallback: Int) -> Int {
+    if isInt(text) {
+        return toInt(text)
+    }
+    return fallback
+}
+
+fn main() {
+    inputs := ["42", "-7", "oops", "", "+5", "12x"]
+    mut total := 0
+    for text in inputs {
+        value := parseOr(text, 0)
+        print("\"" + text + "\" -> " + toString(value))
+        total = total + value
+    }
+    print("total: " + toString(total))
+    print("is done? " + toString(total == 40))
+    print(len("hello") + len("kairo"))
+    print(toInt("9223372036854775807"))
+    print(isInt("9223372036854775808"))
+}

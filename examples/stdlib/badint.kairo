@@ -1,0 +1,5 @@
+fn main() {
+    print("before")
+    print(toInt("abc"))
+    print("never printed")
+}

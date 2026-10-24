@@ -1,0 +1,9 @@
+[package]
+name = "kairo-builtins"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Standard-library function signatures shared by the Kairo type checker, interpreter and native compiler"
+
+[dependencies]
