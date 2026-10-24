@@ -8,6 +8,7 @@ description = "Static type checker for the Kairo programming language"
 
 [dependencies]
 kairo-ast = { path = "../ast" }
+kairo-builtins = { path = "../builtins" }
 
 [dev-dependencies]
 kairo-lexer = { path = "../lexer" }

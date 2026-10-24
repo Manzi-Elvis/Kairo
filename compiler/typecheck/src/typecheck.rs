@@ -3,6 +3,8 @@ use kairo_ast::{
 };
 use std::collections::{HashMap, HashSet};
 
+use kairo_builtins::{BType, Builtin};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
     Int,
@@ -107,6 +109,15 @@ pub struct TypeChecker {
     enum_variants: HashMap<String, HashMap<String, Vec<(String, Type)>>>,
     functions: HashMap<String, FunctionSig>,
     current_return_type: Type,
+}
+
+fn btype_to_type(b: BType) -> Type {
+    match b {
+        BType::Int => Type::Int,
+        BType::Bool => Type::Bool,
+        BType::Str => Type::String,
+        BType::StrArray => Type::Array(Box::new(Type::String)),
+    }
 }
 
 impl Default for TypeChecker {
@@ -789,7 +800,7 @@ impl TypeChecker {
                     found: args.len(),
                 });
             } else if let Some(t) = self.eval_expr_type(&args[0], scope, errors) {
-                if !matches!(t, Type::Array(_)) {
+                if !matches!(t, Type::Array(_) | Type::String) {
                     errors.push(TypeError::Mismatch {
                         expected: "Array".to_string(),
                         found: t.name(),
@@ -836,6 +847,15 @@ impl TypeChecker {
                 }
                 None => None,
             };
+        }
+
+        if !self.functions.contains_key(callee) {
+            if callee == "toString" {
+                return self.check_to_string(args, scope, errors);
+            }
+            if let Some(b) = kairo_builtins::lookup(callee) {
+                return self.check_builtin_call(b, args, scope, errors);
+            }
         }
 
         let Some(sig_len) = self.functions.get(callee).map(|s| s.params.len()) else {
@@ -1027,6 +1047,63 @@ impl TypeChecker {
             });
         }
         Some(ok_fields[0].1.clone())
+    }
+
+    fn check_to_string(
+        &self,
+        args: &[Expr],
+        scope: &Scopes,
+        errors: &mut Vec<TypeError>,
+    ) -> Option<Type> {
+        if args.len() != 1 {
+            errors.push(TypeError::WrongArgCount {
+                callee: "toString".to_string(),
+                expected: 1,
+                found: args.len(),
+            });
+            for a in args {
+                self.eval_expr_type(a, scope, errors);
+            }
+        } else if let Some(t) = self.eval_expr_type(&args[0], scope, errors) {
+            if !matches!(t, Type::Int | Type::Bool | Type::String) {
+                errors.push(TypeError::Mismatch {
+                    expected: "Int, Bool or String".to_string(),
+                    found: t.name(),
+                    context: "argument to `toString`".to_string(),
+                });
+            }
+        }
+        Some(Type::String)
+    }
+
+    fn check_builtin_call(
+        &self,
+        b: &Builtin,
+        args: &[Expr],
+        scope: &Scopes,
+        errors: &mut Vec<TypeError>,
+    ) -> Option<Type> {
+        if args.len() != b.params.len() {
+            errors.push(TypeError::WrongArgCount {
+                callee: b.name.to_string(),
+                expected: b.params.len(),
+                found: args.len(),
+            });
+        }
+        for (i, arg) in args.iter().enumerate() {
+            let found = self.eval_expr_type(arg, scope, errors);
+            if let (Some(found), Some(param)) = (found, b.params.get(i)) {
+                let expected = btype_to_type(*param);
+                if found != expected {
+                    errors.push(TypeError::Mismatch {
+                        expected: expected.name(),
+                        found: found.name(),
+                        context: format!("argument {} to `{}`", i + 1, b.name),
+                    });
+                }
+            }
+        }
+        Some(btype_to_type(b.ret))
     }
 }
 
@@ -1391,5 +1468,30 @@ mod tests {
     fn for_loop_variable_does_not_leak() {
         let err = check("fn main() { for i in 0..2 { print(i) }\nprint(i) }").unwrap_err();
         assert!(err.contains(&TypeError::UndefinedVariable("i".to_string())));
+    }
+
+        #[test]
+    fn passes_stdlib_calls() {
+        let source = "fn main() {\n name := input()\n n := toInt(\"42\")\n ok := isInt(name)\n print(toString(n) + \"!\")\n print(len(name))\n print(ok)\n}";
+        assert_eq!(check(source), Ok(()));
+    }
+
+    #[test]
+    fn catches_wrong_stdlib_argument_type() {
+        let err = check("fn main() { x := toInt(5) }").unwrap_err();
+        assert!(err.iter().any(|e| matches!(e, TypeError::Mismatch { .. })));
+    }
+
+    #[test]
+    fn catches_to_string_on_struct() {
+        let source = "struct P { x: Int }\nfn main() { p := P { x: 1 }\nprint(toString(p)) }";
+        let err = check(source).unwrap_err();
+        assert!(err.iter().any(|e| matches!(e, TypeError::Mismatch { .. })));
+    }
+
+    #[test]
+    fn user_function_shadows_stdlib_name() {
+        let source = "fn isInt(s: String) -> Bool { return true }\nfn main() { print(isInt(\"x\")) }";
+        assert_eq!(check(source), Ok(()));
     }
 }
