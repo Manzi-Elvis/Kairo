@@ -1,0 +1,15 @@
+fn main() {
+    name := input()
+    if name == "" {
+        print("Hello, stranger!")
+    } else {
+        print("Hello, " + name + "!")
+    }
+
+    age := input()
+    if isInt(age) {
+        print("Next year you will be " + toString(toInt(age) + 1))
+    } else {
+        print("That doesn't look like a number: " + age)
+    }
+}

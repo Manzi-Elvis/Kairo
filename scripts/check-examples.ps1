@@ -1,6 +1,6 @@
 # Runs every single-file example through the interpreter and through the
 # native compiler, and checks that both agree on output and exit code.
-$dirs = 'examples/native', 'examples/scoping', 'examples/operators', 'examples/iteration'
+$dirs = 'examples/native', 'examples/scoping', 'examples/operators', 'examples/iteration' , 'examples/stdlib'
 $failures = 0
 
 foreach ($dir in $dirs) {
