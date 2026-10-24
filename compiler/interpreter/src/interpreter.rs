@@ -25,6 +25,7 @@ pub enum RuntimeError {
     /// the nearest function-call boundary when `?` hits an Err.
     TryPropagate(Value),
     NotResultShaped(String),
+    StdlibError(String),
 }
 
 /// A variable binding: its current value plus whether `=` may update it.
@@ -507,6 +508,7 @@ impl<'a> Interpreter<'a> {
             (self.print_sink)(&value.display());
             return Ok(Value::Unit);
         }
+
         if callee == "len" {
             if args.len() != 1 {
                 return Err(RuntimeError::WrongArgCount {
@@ -515,11 +517,16 @@ impl<'a> Interpreter<'a> {
                     found: args.len(),
                 });
             }
-            let Value::Array(items) = self.eval_expr(&args[0])? else {
-                return Err(RuntimeError::TypeError("len expects an Array".to_string()));
+            return match self.eval_expr(&args[0])? {
+                Value::Array(items) => Ok(Value::Int(items.len() as i64)),
+                Value::String(s) => Ok(Value::Int(s.len() as i64)),
+                other => Err(RuntimeError::TypeError(format!(
+                    "len expects an Array or String, found {}",
+                    other.type_name()
+                ))),
             };
-            return Ok(Value::Int(items.len() as i64));
         }
+
         if callee == "push" {
             if args.len() != 2 {
                 return Err(RuntimeError::WrongArgCount {
@@ -539,8 +546,34 @@ impl<'a> Interpreter<'a> {
         }
 
         let Some(func) = self.functions.get(callee).cloned() else {
+            if callee == "toString" {
+                if args.len() != 1 {
+                    return Err(RuntimeError::WrongArgCount {
+                        callee: "toString".to_string(),
+                        expected: 1,
+                        found: args.len(),
+                    });
+                }
+                return match self.eval_expr(&args[0])? {
+                    Value::Int(i) => Ok(Value::String(i.to_string())),
+                    Value::Bool(b) => Ok(Value::String(b.to_string())),
+                    Value::String(s) => Ok(Value::String(s)),
+                    other => Err(RuntimeError::TypeError(format!(
+                        "toString supports Int, Bool and String, found {}",
+                        other.type_name()
+                    ))),
+                };
+            }
+            if let Some(builtin) = kairo_builtins::lookup(callee) {
+                let mut values = Vec::with_capacity(args.len());
+                for arg in args {
+                    values.push(self.eval_expr(arg)?);
+                }
+                return crate::stdlib::call(builtin.name, values);
+            }
             return Err(RuntimeError::UndefinedFunction(callee.to_string()));
         };
+
         self.call_user_function(&func, args)
     }
 
@@ -1040,5 +1073,38 @@ mod tests {
             run_and_capture(source).unwrap(),
             vec!["a\tb\"c\"".to_string()]
         );
+    }
+
+    #[test]
+    fn converts_between_strings_and_ints() {
+        let source = r#"
+            fn main() {
+                print(toInt("42") + 1)
+                print(toInt("-7"))
+                print(isInt("12"))
+                print(isInt("1x"))
+                print(isInt(""))
+                print(toString(5) + "!")
+                print(toString(true))
+                print(len("hello"))
+            }
+        "#;
+        let expected: Vec<String> = ["43", "-7", "true", "false", "false", "5!", "true", "5"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(run_and_capture(source).unwrap(), expected);
+    }
+
+    #[test]
+    fn reports_invalid_integer() {
+        let err = run_and_capture("fn main() { x := toInt(\"abc\") }").unwrap_err();
+        assert!(matches!(err, RuntimeError::StdlibError(_)));
+    }
+
+    #[test]
+    fn user_function_shadows_stdlib_name() {
+        let source = "fn isInt(s: String) -> Bool { return false }\nfn main() { print(isInt(\"12\")) }";
+        assert_eq!(run_and_capture(source).unwrap(), vec!["false".to_string()]);
     }
 }

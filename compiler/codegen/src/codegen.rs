@@ -30,6 +30,7 @@ const DIV_MSG: &str = "division by zero\n";
 use kairo_ast::{BinaryOp, Param, UnaryOp};
 use kairo_hir::{HExpr, HFunctionDecl, HProgram, HStmt};
 use std::collections::{HashMap, HashSet};
+use kairo_builtins::{BType, Builtin};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CodegenError {
@@ -147,6 +148,11 @@ pub fn generate(program: &HProgram) -> Result<String, CodegenError> {
     out.push("declare i32 @strcmp(i8*, i8*)".to_string());
     out.push("declare i8* @memcpy(i8*, i8*, i64)".to_string());
     out.push("declare void @exit(i32)".to_string());
+    out.push("declare i8* @kairo_int_to_string(i64)".to_string());
+    out.push("declare i8* @kairo_bool_to_string(i32)".to_string());
+    for b in kairo_builtins::BUILTINS {
+        out.push(builtin_declaration(b));
+    }
 
     for s in &program.structs {
         let field_types: Vec<String> = struct_types[&s.name]
@@ -345,6 +351,29 @@ fn collect_in_expr(expr: &HExpr, found: &mut Vec<String>) {
     }
 }
 
+fn btype_to_ltype(b: BType) -> LType {
+    match b {
+        BType::Int => LType::Int,
+        BType::Bool => LType::I1,
+        BType::Str => LType::Str,
+        BType::StrArray => LType::Array(Box::new(LType::Str)),
+    }
+}
+
+/// The C runtime takes and returns Bool as `int`, so declarations use i32
+/// there; gen_builtin_call converts at the boundary.
+fn c_abi_type(b: BType) -> String {
+    match b {
+        BType::Bool => "i32".to_string(),
+        other => btype_to_ltype(other).llvm(),
+    }
+}
+
+fn builtin_declaration(b: &Builtin) -> String {
+    let params: Vec<String> = b.params.iter().map(|p| c_abi_type(*p)).collect();
+    format!("declare {} @{}({})", c_abi_type(b.ret), b.c_symbol, params.join(", "))
+}
+
 struct FnCodegen<'a> {
     fn_sigs: &'a HashMap<String, FnSig>,
     strings: &'a HashMap<String, (String, usize)>,
@@ -381,6 +410,67 @@ impl<'a> FnCodegen<'a> {
             temp_counter: 0,
             block_counter: 0,
             terminated: false,
+        }
+    }
+
+    fn gen_builtin_call(
+        &mut self,
+        b: &Builtin,
+        args: &[HExpr],
+    ) -> Result<(String, LType), CodegenError> {
+        let mut arg_strs = Vec::new();
+        for (arg, param) in args.iter().zip(b.params) {
+            let (val, ty) = self.gen_expr(arg)?;
+            if *param == BType::Bool {
+                let wide = self.fresh_temp();
+                self.emit(format!("  {wide} = zext i1 {val} to i32"));
+                arg_strs.push(format!("i32 {wide}"));
+            } else {
+                arg_strs.push(format!("{} {val}", ty.llvm()));
+            }
+        }
+
+        let ret_ty = btype_to_ltype(b.ret);
+        let t = self.fresh_temp();
+        if b.ret == BType::Bool {
+            let raw = self.fresh_temp();
+            self.emit(format!("  {raw} = call i32 @{}({})", b.c_symbol, arg_strs.join(", ")));
+            self.emit(format!("  {t} = icmp ne i32 {raw}, 0"));
+        } else {
+            self.emit(format!(
+                "  {t} = call {} @{}({})",
+                ret_ty.llvm(),
+                b.c_symbol,
+                arg_strs.join(", ")
+            ));
+        }
+        Ok((t, ret_ty))
+    }
+
+    fn gen_to_string(&mut self, args: &[HExpr]) -> Result<(String, LType), CodegenError> {
+        if args.len() != 1 {
+            return Err(CodegenError::UnsupportedFeature(
+                "toString expects exactly 1 argument".to_string(),
+            ));
+        }
+        let (val, ty) = self.gen_expr(&args[0])?;
+        match ty {
+            LType::Int => {
+                let t = self.fresh_temp();
+                self.emit(format!("  {t} = call i8* @kairo_int_to_string(i64 {val})"));
+                Ok((t, LType::Str))
+            }
+            LType::I1 => {
+                let wide = self.fresh_temp();
+                self.emit(format!("  {wide} = zext i1 {val} to i32"));
+                let t = self.fresh_temp();
+                self.emit(format!("  {t} = call i8* @kairo_bool_to_string(i32 {wide})"));
+                Ok((t, LType::Str))
+            }
+            LType::Str => Ok((val, LType::Str)),
+            _ => Err(CodegenError::UnsupportedFeature(
+                "toString supports Int, Bool and String".to_string(),
+            )),
         }
     }
 
@@ -1313,6 +1403,11 @@ impl<'a> FnCodegen<'a> {
                 ));
             }
             let (arr_val, arr_ty) = self.gen_expr(&args[0])?;
+            if arr_ty == LType::Str {
+                let n = self.fresh_temp();
+                self.emit(format!("  {n} = call i64 @strlen(i8* {arr_val})"));
+                return Ok((n, LType::Int));
+            }
             if !matches!(arr_ty, LType::Array(_)) {
                 return Err(CodegenError::UnsupportedFeature(
                     "len expects an array".to_string(),
@@ -1403,6 +1498,15 @@ impl<'a> FnCodegen<'a> {
             self.emit(format!("  store i8* {new_raw}, i8** {new_data_ptr}"));
 
             return Ok((new_arr_obj, LType::Array(elem_ty)));
+        }
+
+        if !self.fn_sigs.contains_key(callee) {
+            if callee == "toString" {
+                return self.gen_to_string(args);
+            }
+            if let Some(b) = kairo_builtins::lookup(callee) {
+                return self.gen_builtin_call(b, args);
+            }
         }
 
         let sig = self
@@ -1708,5 +1812,27 @@ mod tests {
     fn escapes_newlines_in_string_constants() {
         let ir = gen_source(r#"fn main() { print("a\nb") }"#).unwrap();
         assert!(ir.contains(r"a\0Ab"));
+    }
+
+    #[test]
+    fn generates_stdlib_calls() {
+        let source = "fn main() { n := toInt(\"7\")\nprint(isInt(\"x\"))\nprint(toString(n) + \"!\") }";
+        let ir = gen_source(source).unwrap();
+        assert!(ir.contains("call i64 @kairo_to_int"));
+        assert!(ir.contains("call i32 @kairo_is_int"));
+        assert!(ir.contains("icmp ne i32"));
+        assert!(ir.contains("call i8* @kairo_int_to_string"));
+    }
+
+    #[test]
+    fn generates_string_len() {
+        let ir = gen_source("fn main() { print(len(\"abc\")) }").unwrap();
+        assert!(ir.contains("call i64 @strlen"));
+    }
+
+    #[test]
+    fn generates_input_call() {
+        let ir = gen_source("fn main() { print(input()) }").unwrap();
+        assert!(ir.contains("call i8* @kairo_input()"));
     }
 }

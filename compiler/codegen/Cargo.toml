@@ -9,6 +9,7 @@ description = "LLVM textual IR codegen for the Kairo programming language (Int/B
 [dependencies]
 kairo-ast = { path = "../ast" }
 kairo-hir = { path = "../hir" }
+kairo-builtins = { path = "../builtins" }
 
 [dev-dependencies]
 kairo-lexer = { path = "../lexer" }

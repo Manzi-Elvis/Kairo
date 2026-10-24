@@ -636,3 +636,31 @@ native compiler share one implementation.
 ## String escapes
 `\n`, `\t`, `\r`, `\\` and `\"` are recognized inside string
 literals. Any other escape is a lex error.
+
+
+---
+
+# Kairo v0.26: standard library core
+
+| Function | Description |
+|---|---|
+| `input() -> String` | Reads one line from standard input, without its line ending. Returns `""` at end of input. |
+| `toInt(s: String) -> Int` | Parses an integer: optional `+`/`-`, digits only, must fit in 64 bits. |
+| `isInt(s: String) -> Bool` | True when `toInt(s)` would succeed. |
+| `toString(x) -> String` | Converts an `Int`, `Bool` or `String` to a string. |
+| `len(s: String) -> Int` | Length in bytes. (`len` also works on arrays.) |
+
+## Failure behavior
+Standard-library failures are runtime errors: the program prints a
+message and exits with status 1. Check first with `isInt`. This will be
+revisited once generics allow a real `Result` type.
+
+## Notes
+- A function you define yourself takes precedence over a standard-library
+  function with the same name.
+- String length and indexing count bytes, so non-ASCII text is only
+  reliable for printing and concatenation.
+- Native builds compile a small C runtime
+  (`compiler/codegen/runtime/kairo_runtime.c`) with the same clang that
+  compiles the generated code. The interpreter and the runtime implement
+  identical behavior.
