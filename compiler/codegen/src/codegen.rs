@@ -185,6 +185,12 @@ pub fn generate(program: &HProgram) -> Result<String, CodegenError> {
     }
 
     out.push("%__kairo_array = type { i64, i8* }".to_string());
+        
+    out.push("declare i8* @kairo_int_to_string(i64)".to_string());
+    out.push("declare i8* @kairo_bool_to_string(i32)".to_string());
+    for b in kairo_builtins::BUILTINS {
+        out.push(builtin_declaration(b));
+    }
 
     out.push(r#"@.int_fmt = private unnamed_addr constant [6 x i8] c"%lld\0A\00""#.to_string());
     out.push(r#"@.str_fmt = private unnamed_addr constant [4 x i8] c"%s\0A\00""#.to_string());
@@ -1834,5 +1840,15 @@ mod tests {
     fn generates_input_call() {
         let ir = gen_source("fn main() { print(input()) }").unwrap();
         assert!(ir.contains("call i8* @kairo_input()"));
+    }
+
+    #[test]
+    fn generates_string_function_calls() {
+        let source = "fn main() { parts := split(\"a,b\", \",\")\nprint(join(parts, \"-\"))\nprint(substring(\"abc\", 0, 1)) }";
+        let ir = gen_source(source).unwrap();
+        assert!(ir.contains("declare %__kairo_array* @kairo_split(i8*, i8*)"));
+        assert!(ir.contains("call %__kairo_array* @kairo_split(i8*"));
+        assert!(ir.contains("call i8* @kairo_join(%__kairo_array*"));
+        assert!(ir.contains("call i8* @kairo_substring(i8*"));
     }
 }
