@@ -1,0 +1,7 @@
+fn main() {
+    names := args()
+    print("got " + toString(len(names)) + " argument(s)")
+    for name in names {
+        print("- " + name)
+    }
+}

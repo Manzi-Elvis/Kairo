@@ -1,0 +1,14 @@
+fn check(n: Int) {
+    if n > 2 {
+        print("too big, stopping")
+        exit(3)
+    }
+    print(n)
+}
+
+fn main() {
+    for i in 1..10 {
+        check(i)
+    }
+    print("unreachable")
+}

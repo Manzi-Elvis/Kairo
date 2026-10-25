@@ -26,7 +26,7 @@
 //!   by Kairo-level enum name, since the type checker already
 //!   guarantees it's the same enum as the `?`'d expression's type.
 
-const DIV_MSG: &str = "division by zero\n";
+const DIV_MSG: &str = "division by zero";
 use kairo_ast::{BinaryOp, Param, UnaryOp};
 use kairo_hir::{HExpr, HFunctionDecl, HProgram, HStmt};
 use std::collections::{HashMap, HashSet};
@@ -148,6 +148,8 @@ pub fn generate(program: &HProgram) -> Result<String, CodegenError> {
     out.push("declare i32 @strcmp(i8*, i8*)".to_string());
     out.push("declare i8* @memcpy(i8*, i8*, i64)".to_string());
     out.push("declare void @exit(i32)".to_string());
+    out.push("declare void @kairo_fatal(i8*)".to_string());
+    out.push("declare void @kairo_set_args(i32, i8**)".to_string());
     
     for s in &program.structs {
         let field_types: Vec<String> = struct_types[&s.name]
@@ -191,7 +193,7 @@ pub fn generate(program: &HProgram) -> Result<String, CodegenError> {
     out.push(r#"@.str_fmt = private unnamed_addr constant [4 x i8] c"%s\0A\00""#.to_string());
     out.push(r#"@.true_str = private unnamed_addr constant [6 x i8] c"true\0A\00""#.to_string());
     out.push(r#"@.false_str = private unnamed_addr constant [7 x i8] c"false\0A\00""#.to_string());
-    let (oob_escaped, oob_len) = llvm_escape_string("index out of bounds\n");
+    let (oob_escaped, oob_len) = llvm_escape_string("index out of bounds");
     out.push(format!(
         "@.oob_msg = private unnamed_addr constant [{oob_len} x i8] c\"{oob_escaped}\""
     ));
@@ -242,8 +244,9 @@ pub fn generate(program: &HProgram) -> Result<String, CodegenError> {
     out.push(gen.generate_function(&renamed, main_sig)?);
     out.push(String::new());
 
-    out.push("define i32 @main() {".to_string());
+    out.push("define i32 @main(i32 %argc, i8** %argv) {".to_string());
     out.push("entry:".to_string());
+    out.push("  call void @kairo_set_args(i32 %argc, i8** %argv)".to_string());
     out.push("  call void @kairo_main()".to_string());
     out.push("  ret i32 0".to_string());
     out.push("}".to_string());
@@ -358,6 +361,7 @@ fn btype_to_ltype(b: BType) -> LType {
         BType::Bool => LType::I1,
         BType::Str => LType::Str,
         BType::StrArray => LType::Array(Box::new(LType::Str)),
+        BType::Unit => LType::Void,
     }
 }
 
@@ -429,6 +433,11 @@ impl<'a> FnCodegen<'a> {
             } else {
                 arg_strs.push(format!("{} {val}", ty.llvm()));
             }
+        }
+
+        if b.ret == BType::Unit {
+            self.emit(format!("  call void @{}({})", b.c_symbol, arg_strs.join(", ")));
+            return Ok(("0".to_string(), LType::Void));
         }
 
         let ret_ty = btype_to_ltype(b.ret);
@@ -522,8 +531,7 @@ impl<'a> FnCodegen<'a> {
         self.emit(format!(
             "  {msgp} = getelementptr [{len} x i8], [{len} x i8]* @.oob_msg, i32 0, i32 0"
         ));
-        self.emit(format!("  call i32 (i8*, ...) @printf(i8* {msgp})"));
-        self.emit("  call void @exit(i32 1)".to_string());
+        self.emit(format!("  call void @kairo_fatal(i8* {msgp})"));
         self.lines.push("  unreachable".to_string());
         self.terminated = true;
 
@@ -1293,8 +1301,7 @@ impl<'a> FnCodegen<'a> {
                 self.emit(format!(
                     "  {msgp} = getelementptr [{len} x i8], [{len} x i8]* @.div_msg, i32 0, i32 0"
                 ));
-                self.emit(format!("  call i32 (i8*, ...) @printf(i8* {msgp})"));
-                self.emit("  call void @exit(i32 1)".to_string());
+                self.emit(format!("  call void @kairo_fatal(i8* {msgp})"));
                 self.lines.push("  unreachable".to_string());
                 self.terminated = true;
 
@@ -1845,5 +1852,23 @@ mod tests {
         assert!(ir.contains("call %__kairo_array* @kairo_split(i8*"));
         assert!(ir.contains("call i8* @kairo_join(%__kairo_array*"));
         assert!(ir.contains("call i8* @kairo_substring(i8*"));
+    }
+
+    #[test]
+    fn generates_file_args_and_exit_calls() {
+        let source = "fn main() { writeFile(\"a\", \"b\")\nprint(readFile(\"a\"))\nprint(fileExists(\"a\"))\nprint(len(args()))\nexit(1) }";
+        let ir = gen_source(source).unwrap();
+        assert!(ir.contains("call void @kairo_write_file(i8*"));
+        assert!(ir.contains("call i8* @kairo_read_file(i8*"));
+        assert!(ir.contains("call %__kairo_array* @kairo_args()"));
+        assert!(ir.contains("call void @kairo_exit(i64"));
+        assert!(ir.contains("define i32 @main(i32 %argc, i8** %argv)"));
+    }
+
+    #[test]
+    fn runtime_errors_call_kairo_fatal() {
+        let ir = gen_source("fn main() { print(10 / 2) }").unwrap();
+        assert!(ir.contains("call void @kairo_fatal(i8*"));
+        assert!(!ir.contains("call void @exit(i32 1)"));
     }
 }
