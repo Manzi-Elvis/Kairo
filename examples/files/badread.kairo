@@ -1,0 +1,5 @@
+fn main() {
+    print("start")
+    print(readFile("no_such_file_anywhere.txt"))
+    print("never printed")
+}

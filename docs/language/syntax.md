@@ -686,3 +686,28 @@ All functions work on bytes. Passing an empty search string to `replace`
 or an empty separator to `split` is a runtime error, like the other
 standard-library failures. The interpreter and the native runtime
 implement identical behavior.
+
+
+---
+
+# Kairo v0.28: files, arguments, exit
+
+| Function | Description |
+|---|---|
+| `readFile(path) -> String` | Whole file as text. Runtime error if it can't be read. |
+| `writeFile(path, text)` | Creates or replaces a file. |
+| `appendFile(path, text)` | Appends to a file, creating it if needed. |
+| `fileExists(path) -> Bool` | True if the file can be opened for reading. |
+| `deleteFile(path)` | Deletes a file. Runtime error if it can't be deleted. |
+| `args() -> Array<String>` | Command-line arguments after the program name: `kairo run prog.kairo a b` or `./prog a b` gives `["a", "b"]`. |
+| `exit(code)` | Ends the program with the given status (use 0 to 255). |
+
+Files are read and written byte for byte, with no newline translation.
+`readFile` is for text: a file containing a NUL byte is an error, and
+the interpreter also rejects invalid UTF-8.
+
+## Runtime errors
+Runtime errors (including the earlier ones such as division by zero or
+an index out of bounds) are now printed to **stderr** by both the
+interpreter and native programs, and the exit status is 1. Anything the
+program printed before the error is still on stdout.

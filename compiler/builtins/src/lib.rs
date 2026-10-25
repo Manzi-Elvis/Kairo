@@ -13,6 +13,8 @@ pub enum BType {
     Bool,
     Str,
     StrArray,
+    /// No value. Only valid as a return type.
+    Unit,
 }
 
 #[derive(Debug)]
@@ -39,6 +41,13 @@ pub const BUILTINS: &[Builtin] = &[
     Builtin { name: "replace", params: &[BType::Str, BType::Str, BType::Str], ret: BType::Str, c_symbol: "kairo_replace" },
     Builtin { name: "split", params: &[BType::Str, BType::Str], ret: BType::StrArray, c_symbol: "kairo_split" },
     Builtin { name: "join", params: &[BType::StrArray, BType::Str], ret: BType::Str, c_symbol: "kairo_join" },
+    Builtin { name: "readFile", params: &[BType::Str], ret: BType::Str, c_symbol: "kairo_read_file" },
+    Builtin { name: "writeFile", params: &[BType::Str, BType::Str], ret: BType::Unit, c_symbol: "kairo_write_file" },
+    Builtin { name: "appendFile", params: &[BType::Str, BType::Str], ret: BType::Unit, c_symbol: "kairo_append_file" },
+    Builtin { name: "fileExists", params: &[BType::Str], ret: BType::Bool, c_symbol: "kairo_file_exists" },
+    Builtin { name: "deleteFile", params: &[BType::Str], ret: BType::Unit, c_symbol: "kairo_delete_file" },
+    Builtin { name: "args", params: &[], ret: BType::StrArray, c_symbol: "kairo_args" },
+    Builtin { name: "exit", params: &[BType::Int], ret: BType::Unit, c_symbol: "kairo_exit" },
 ];
 
 pub fn lookup(name: &str) -> Option<&'static Builtin> {

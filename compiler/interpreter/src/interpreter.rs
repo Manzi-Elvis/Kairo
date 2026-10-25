@@ -26,6 +26,7 @@ pub enum RuntimeError {
     TryPropagate(Value),
     NotResultShaped(String),
     StdlibError(String),
+    Exit(i32),
 }
 
 /// A variable binding: its current value plus whether `=` may update it.
@@ -46,6 +47,7 @@ pub struct Interpreter<'a> {
     structs: HashMap<String, StructDecl>,
     enums: HashMap<String, EnumDecl>,
     print_sink: &'a mut dyn FnMut(&str),
+    program_args: Vec<String>,
 }
 
 impl<'a> Interpreter<'a> {
@@ -56,6 +58,7 @@ impl<'a> Interpreter<'a> {
             structs: HashMap::new(),
             enums: HashMap::new(),
             print_sink,
+            program_args: Vec::new(),
         }
     }
 
@@ -569,7 +572,7 @@ impl<'a> Interpreter<'a> {
                 for arg in args {
                     values.push(self.eval_expr(arg)?);
                 }
-                return crate::stdlib::call(builtin.name, values);
+                return crate::stdlib::call(builtin.name, values, &self.program_args);
             }
             return Err(RuntimeError::UndefinedFunction(callee.to_string()));
         };
@@ -643,6 +646,10 @@ impl<'a> Interpreter<'a> {
                 other.type_name()
             ))),
         }
+    }
+
+    pub fn set_program_args(&mut self, args: Vec<String>) {
+        self.program_args = args;
     }
 }
 
@@ -1143,5 +1150,48 @@ mod tests {
     fn reports_empty_separator() {
         let err = run_and_capture("fn main() { x := split(\"abc\", \"\") }").unwrap_err();
         assert!(matches!(err, RuntimeError::StdlibError(_)));
+    }
+
+    #[test]
+    fn writes_appends_and_reads_files() {
+        let path = std::env::temp_dir().join(format!("kairo_test_{}.txt", std::process::id()));
+        let p = path.to_string_lossy().replace('\\', "/");
+        let source = format!(
+            r#"
+            fn main() {{
+                writeFile("{p}", "one\n")
+                appendFile("{p}", "two\n")
+                print(readFile("{p}"))
+                print(fileExists("{p}"))
+                deleteFile("{p}")
+                print(fileExists("{p}"))
+            }}
+        "#
+        );
+        assert_eq!(
+            run_and_capture(&source).unwrap(),
+            vec!["one\ntwo\n".to_string(), "true".to_string(), "false".to_string()]
+        );
+    }
+
+    #[test]
+    fn reports_missing_file() {
+        let err =
+            run_and_capture("fn main() { x := readFile(\"/definitely/not/here.txt\") }").unwrap_err();
+        assert!(matches!(err, RuntimeError::StdlibError(_)));
+    }
+
+    #[test]
+    fn exit_stops_the_program_with_a_code() {
+        let err = run_and_capture("fn main() { print(\"a\")\nexit(3)\nprint(\"b\") }").unwrap_err();
+        assert_eq!(err, RuntimeError::Exit(3));
+    }
+
+    #[test]
+    fn args_is_empty_by_default() {
+        assert_eq!(
+            run_and_capture("fn main() { print(len(args())) }").unwrap(),
+            vec!["0".to_string()]
+        );
     }
 }

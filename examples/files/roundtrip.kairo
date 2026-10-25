@@ -1,0 +1,19 @@
+fn main() {
+    path := "kairo_example_notes.txt"
+
+    writeFile(path, "first line\n")
+    appendFile(path, "second line\n")
+    appendFile(path, "third line\n")
+
+    text := readFile(path)
+    lines := split(trim(text), "\n")
+    print(len(lines))
+    for line in lines {
+        print("> " + toUpper(line))
+    }
+
+    print(fileExists(path))
+    deleteFile(path)
+    print(fileExists(path))
+    print(len(args()))
+}
