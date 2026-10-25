@@ -1,6 +1,6 @@
 use kairo_codegen::{generate, RUNTIME_C};
 use kairo_hir::lower_program;
-use kairo_interpreter::Interpreter;
+use kairo_interpreter::{Interpreter, RuntimeError};
 use kairo_loader::{load_program, LoadError, ModuleSource};
 use kairo_typecheck::TypeChecker;
 use std::env;
@@ -54,13 +54,16 @@ fn run_command(args: &[String]) -> ExitCode {
 
     let mut sink = |s: &str| println!("{s}");
     let mut interpreter = Interpreter::new(&mut sink);
+    interpreter.set_program_args(args.iter().skip(3).cloned().collect());
 
-    if let Err(e) = interpreter.run(&program) {
-        eprintln!("runtime error: {e:?}");
-        return ExitCode::FAILURE;
+    match interpreter.run(&program) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(RuntimeError::Exit(code)) => ExitCode::from((code & 0xFF) as u8),
+        Err(e) => {
+            eprintln!("runtime error: {e:?}");
+            ExitCode::FAILURE
+        }
     }
-
-    ExitCode::SUCCESS
 }
 
 fn check_command(args: &[String]) -> ExitCode {

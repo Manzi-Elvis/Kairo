@@ -4,9 +4,9 @@
 
 use crate::interpreter::RuntimeError;
 use crate::value::Value;
-use std::io::BufRead;
+use std::io::{BufRead, Write};
 
-pub fn call(name: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
+pub fn call(name: &str, args: Vec<Value>, program_args: &[String]) -> Result<Value, RuntimeError> {
     match (name, args.as_slice()) {
         ("input", []) => Ok(Value::String(read_line())),
         ("toInt", [Value::String(s)]) => match s.parse::<i64>() {
@@ -71,6 +71,40 @@ pub fn call(name: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
             }
             Ok(Value::String(parts.join(sep.as_str())))
         }
+        ("readFile", [Value::String(path)]) => {
+            let bytes = std::fs::read(path)
+                .map_err(|_| RuntimeError::StdlibError(format!("cannot read file: {path}")))?;
+            if bytes.contains(&0) {
+                return Err(RuntimeError::StdlibError(format!(
+                    "file contains a NUL byte: {path}"
+                )));
+            }
+            String::from_utf8(bytes).map(Value::String).map_err(|_| {
+                RuntimeError::StdlibError(format!("file is not valid UTF-8: {path}"))
+            })
+        }
+        ("writeFile", [Value::String(path), Value::String(text)]) => std::fs::write(path, text)
+            .map(|_| Value::Unit)
+            .map_err(|_| RuntimeError::StdlibError(format!("cannot write file: {path}"))),
+        ("appendFile", [Value::String(path), Value::String(text)]) => {
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .and_then(|mut f| f.write_all(text.as_bytes()))
+                .map(|_| Value::Unit)
+                .map_err(|_| RuntimeError::StdlibError(format!("cannot write file: {path}")))
+        }
+        ("fileExists", [Value::String(path)]) => {
+            Ok(Value::Bool(std::fs::File::open(path).is_ok()))
+        }
+        ("deleteFile", [Value::String(path)]) => std::fs::remove_file(path)
+            .map(|_| Value::Unit)
+            .map_err(|_| RuntimeError::StdlibError(format!("cannot delete file: {path}"))),
+        ("args", []) => Ok(Value::Array(
+            program_args.iter().map(|a| Value::String(a.clone())).collect(),
+        )),
+        ("exit", [Value::Int(code)]) => Err(RuntimeError::Exit(*code as i32)),
         _ => Err(RuntimeError::TypeError(format!("bad arguments to `{name}`"))),
     }
 }
