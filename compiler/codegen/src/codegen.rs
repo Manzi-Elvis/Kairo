@@ -358,6 +358,7 @@ fn btype_to_ltype(b: BType) -> LType {
         BType::Bool => LType::I1,
         BType::Str => LType::Str,
         BType::StrArray => LType::Array(Box::new(LType::Str)),
+        BType::Unit => LType::Void,
     }
 }
 
