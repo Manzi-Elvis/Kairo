@@ -1,6 +1,7 @@
 # Runs every single-file example through the interpreter and through the
-# native compiler, and checks that both agree on output and exit code.
-$dirs = 'examples/native', 'examples/scoping', 'examples/operators', 'examples/iteration' , 'examples/stdlib'
+# native compiler, and checks that both agree on stdout and exit code.
+# Runtime errors go to stderr in both backends, so they are not compared.
+$dirs = 'examples/native', 'examples/scoping', 'examples/operators', 'examples/iteration', 'examples/stdlib', 'examples/files'
 $failures = 0
 
 foreach ($dir in $dirs) {
@@ -17,14 +18,8 @@ foreach ($dir in $dirs) {
             $failures++
             continue
         }
-        $actual = @(& $exe)
+        $actual = @(& $exe 2>$null)
         $actualCode = $LASTEXITCODE
-
-        # On a runtime failure the native binary prints its error message to
-        # stdout (the interpreter uses stderr), so drop that last line.
-        if ($actualCode -ne 0 -and $actual.Count -gt 0) {
-            $actual = @($actual | Select-Object -SkipLast 1)
-        }
 
         if ($actualCode -eq $expectedCode -and ($actual -join "`n") -eq ($expected -join "`n")) {
             Write-Host "ok    $($file.Name)"
