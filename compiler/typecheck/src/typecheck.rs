@@ -117,6 +117,7 @@ fn btype_to_type(b: BType) -> Type {
         BType::Bool => Type::Bool,
         BType::Str => Type::String,
         BType::StrArray => Type::Array(Box::new(Type::String)),
+        BType::Unit => Type::Unit,
     }
 }
 
@@ -1504,6 +1505,18 @@ mod tests {
     #[test]
     fn catches_join_on_non_string_array() {
         let err = check("fn main() { print(join([1, 2], \",\")) }").unwrap_err();
+        assert!(err.iter().any(|e| matches!(e, TypeError::Mismatch { .. })));
+    }
+
+    #[test]
+    fn passes_file_args_and_exit_calls() {
+        let source = "fn main() {\n if fileExists(\"a.txt\") { print(readFile(\"a.txt\")) }\n writeFile(\"b.txt\", \"x\")\n appendFile(\"b.txt\", \"y\")\n deleteFile(\"b.txt\")\n for a in args() { print(a) }\n exit(2)\n}";
+        assert_eq!(check(source), Ok(()));
+    }
+
+    #[test]
+    fn catches_exit_with_non_int() {
+        let err = check("fn main() { exit(\"x\") }").unwrap_err();
         assert!(err.iter().any(|e| matches!(e, TypeError::Mismatch { .. })));
     }
 }
