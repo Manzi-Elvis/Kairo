@@ -1,0 +1,32 @@
+fn titleCase(word: String) -> String {
+    if len(word) == 0 {
+        return word
+    }
+    return toUpper(substring(word, 0, 1)) + toLower(substring(word, 1, len(word)))
+}
+
+fn countWords(text: String) -> Int {
+    mut count := 0
+    for word in split(trim(text), " ") {
+        if word != "" {
+            count = count + 1
+        }
+    }
+    return count
+}
+
+fn main() {
+    print(countWords("  the QUICK brown   fox  "))
+
+    for field in split("name,age,city", ",") {
+        print(toUpper(field))
+    }
+
+    print(titleCase("kAIRO"))
+    print(replace("a.b.c", ".", " :: "))
+    print(join(split("2024-01-15", "-"), "/"))
+    print(indexOf("hello world", "o"))
+    print(startsWith("hello", "he"))
+    print(endsWith("hello", "he"))
+    print(contains("hello", ""))
+}
