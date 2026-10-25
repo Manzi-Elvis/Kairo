@@ -148,12 +148,7 @@ pub fn generate(program: &HProgram) -> Result<String, CodegenError> {
     out.push("declare i32 @strcmp(i8*, i8*)".to_string());
     out.push("declare i8* @memcpy(i8*, i8*, i64)".to_string());
     out.push("declare void @exit(i32)".to_string());
-    out.push("declare i8* @kairo_int_to_string(i64)".to_string());
-    out.push("declare i8* @kairo_bool_to_string(i32)".to_string());
-    for b in kairo_builtins::BUILTINS {
-        out.push(builtin_declaration(b));
-    }
-
+    
     for s in &program.structs {
         let field_types: Vec<String> = struct_types[&s.name]
             .iter()
