@@ -1494,4 +1494,16 @@ mod tests {
         let source = "fn isInt(s: String) -> Bool { return true }\nfn main() { print(isInt(\"x\")) }";
         assert_eq!(check(source), Ok(()));
     }
+
+     #[test]
+    fn passes_string_function_calls() {
+        let source = "fn main() {\n parts := split(\"a,b\", \",\")\n print(join(parts, \"-\"))\n print(substring(\"abc\", 0, 1))\n print(contains(trim(\" x \"), \"x\"))\n for p in parts { print(toUpper(p)) }\n}";
+        assert_eq!(check(source), Ok(()));
+    }
+
+    #[test]
+    fn catches_join_on_non_string_array() {
+        let err = check("fn main() { print(join([1, 2], \",\")) }").unwrap_err();
+        assert!(err.iter().any(|e| matches!(e, TypeError::Mismatch { .. })));
+    }
 }

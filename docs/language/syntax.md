@@ -664,3 +664,25 @@ revisited once generics allow a real `Result` type.
   (`compiler/codegen/runtime/kairo_runtime.c`) with the same clang that
   compiles the generated code. The interpreter and the runtime implement
   identical behavior.
+
+  
+---
+
+# Kairo v0.27: string functions
+
+| Function | Description |
+|---|---|
+| `substring(s, start, end) -> String` | Bytes `start` up to (not including) `end`. Requires `0 <= start <= end <= len(s)`, otherwise an index-out-of-bounds error. |
+| `contains(s, part) -> Bool` | True if `part` occurs in `s`. |
+| `indexOf(s, part) -> Int` | Byte index of the first occurrence, or `-1`. |
+| `startsWith(s, prefix) -> Bool`, `endsWith(s, suffix) -> Bool` | Prefix and suffix tests. |
+| `trim(s) -> String` | Removes leading and trailing space, tab, newline, carriage return, vertical tab and form feed. |
+| `toUpper(s) -> String`, `toLower(s) -> String` | ASCII case conversion. |
+| `replace(s, from, to) -> String` | Replaces every non-overlapping occurrence. `from` must not be empty. |
+| `split(s, sep) -> Array<String>` | Splits on every occurrence of `sep`: `split("a,,b", ",")` is `["a", "", "b"]`. `sep` must not be empty. |
+| `join(parts, sep) -> String` | Joins an array of strings with `sep` between them. |
+
+All functions work on bytes. Passing an empty search string to `replace`
+or an empty separator to `split` is a runtime error, like the other
+standard-library failures. The interpreter and the native runtime
+implement identical behavior.

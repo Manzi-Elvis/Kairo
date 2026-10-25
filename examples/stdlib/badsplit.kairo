@@ -1,0 +1,5 @@
+fn main() {
+    print("start")
+    print(len(split("abc", "")))
+    print("never printed")
+}

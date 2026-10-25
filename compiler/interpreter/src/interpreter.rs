@@ -1107,4 +1107,41 @@ mod tests {
         let source = "fn isInt(s: String) -> Bool { return false }\nfn main() { print(isInt(\"12\")) }";
         assert_eq!(run_and_capture(source).unwrap(), vec!["false".to_string()]);
     }
+
+    #[test]
+    fn runs_string_functions() {
+        let source = r#"
+            fn main() {
+                print(substring("hello world", 6, 11))
+                print(contains("kairo", "air"))
+                print(indexOf("banana", "nan"))
+                print(indexOf("banana", "x"))
+                print(startsWith("kairo", "ka") && endsWith("kairo", "ro"))
+                print("[" + trim("  hi \t\n") + "]")
+                print(toUpper("Kairo 1") + toLower(" ABC"))
+                print(replace("a-b-c", "-", "+"))
+                print(join(split("a,b,,c", ","), "|"))
+                print(len(split("a,b,,c", ",")))
+            }
+        "#;
+        let expected: Vec<String> = [
+            "world", "true", "2", "-1", "true", "[hi]", "KAIRO 1 abc", "a+b+c", "a|b||c", "4",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert_eq!(run_and_capture(source).unwrap(), expected);
+    }
+
+    #[test]
+    fn reports_out_of_range_substring() {
+        let err = run_and_capture("fn main() { x := substring(\"abc\", 2, 9) }").unwrap_err();
+        assert_eq!(err, RuntimeError::IndexOutOfBounds(9));
+    }
+
+    #[test]
+    fn reports_empty_separator() {
+        let err = run_and_capture("fn main() { x := split(\"abc\", \"\") }").unwrap_err();
+        assert!(matches!(err, RuntimeError::StdlibError(_)));
+    }
 }
