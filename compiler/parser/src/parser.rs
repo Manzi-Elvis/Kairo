@@ -642,6 +642,10 @@ impl Parser {
                 self.advance();
                 Ok(Expr::IntLiteral(value))
             }
+            TokenKind::FloatLiteral(text) => {
+                self.advance();
+                Ok(Expr::FloatLiteral(text))
+            }
             TokenKind::True => {
                 self.advance();
                 Ok(Expr::BoolLiteral(true))
@@ -1433,5 +1437,21 @@ mod tests {
         assert_eq!(var, "x");
         assert_eq!(*iterable, Expr::Identifier("items".to_string()));
         assert_eq!(body.len(), 1);
+    }
+
+    #[test]
+    fn parses_float_literal_expression() {
+        let program = parse("fn main() { x := 1.5 * 2.0 }").unwrap();
+        let Stmt::VariableDecl { value, .. } = &program.functions[0].body[0] else {
+            panic!("expected VariableDecl");
+        };
+        assert_eq!(
+            *value,
+            Expr::Binary {
+                left: Box::new(Expr::FloatLiteral("1.5".to_string())),
+                op: BinaryOp::Mul,
+                right: Box::new(Expr::FloatLiteral("2.0".to_string())),
+            }
+        );
     }
 }

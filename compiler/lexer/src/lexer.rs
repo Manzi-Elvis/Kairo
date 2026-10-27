@@ -17,6 +17,11 @@ pub enum LexError {
         line: usize,
         column: usize 
     },
+    InvalidNumber {
+        text: String,
+        line: usize, 
+        column: usize 
+    },
 }
 
 pub struct Lexer {
@@ -56,7 +61,7 @@ impl Lexer {
             let kind = if ch.is_alphabetic() || ch == '_' {
                 self.lex_identifier_or_keyword()
             } else if ch.is_ascii_digit() {
-                self.lex_number()
+                self.lex_number()?
             } else if ch == '"' {
                 self.lex_string()?
             } else {
@@ -142,18 +147,56 @@ impl Lexer {
         }
     }
 
-    fn lex_number(&mut self) -> TokenKind {
-        let mut digits = String::new();
+    fn lex_number(&mut self) -> Result<TokenKind, LexError> {
+        let (line, column) = (self.line, self.column);
+        let mut text = String::new();
+        self.take_digits(&mut text);
+        let mut is_float = false;
+
+        // A fraction needs a digit after the dot, so `0..3` stays a range.
+        if self.peek() == Some('.') && self.peek_at(1).is_some_and(|c| c.is_ascii_digit()) {
+            is_float = true;
+            text.push('.');
+            self.advance();
+            self.take_digits(&mut text);
+        }
+
+        // An exponent needs digits too, so `2else` isn't swallowed.
+        if matches!(self.peek(), Some('e') | Some('E')) {
+            let after = self.peek_at(1);
+            let has_digits = after.is_some_and(|c| c.is_ascii_digit())
+                || (matches!(after, Some('+') | Some('-'))
+                    && self.peek_at(2).is_some_and(|c| c.is_ascii_digit()));
+            if has_digits {
+                is_float = true;
+                text.push('e');
+                self.advance();
+                if let Some(sign @ ('+' | '-')) = self.peek() {
+                    text.push(sign);
+                    self.advance();
+                }
+                self.take_digits(&mut text);
+            }
+        }
+
+        if is_float {
+            Ok(TokenKind::FloatLiteral(text))
+        } else {
+            text.parse::<i64>()
+                .map(TokenKind::IntLiteral)
+                .map_err(|_| LexError::InvalidNumber { text, line, column })
+        }
+    }
+
+    fn take_digits(&mut self, out: &mut String) {
         while let Some(c) = self.peek() {
             if c.is_ascii_digit() {
-                digits.push(c);
+                out.push(c);
                 self.advance();
             } else {
                 break;
             }
         }
-        // Safe: we only ever pushed ASCII digits, so this always parses.
-        TokenKind::IntLiteral(digits.parse().unwrap())
     }
 
     fn lex_string(&mut self) -> Result<TokenKind, LexError> {
