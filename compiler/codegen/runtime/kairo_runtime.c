@@ -374,3 +374,62 @@ KairoArray *kairo_args(void) {
 void kairo_exit(i64 code) {
     exit((int)code);
 }
+
+/* ---- Float ---- */
+
+extern int snprintf(char *, size_t, const char *, ...);
+extern double strtod(const char *, char **);
+
+/* Up to 15 significant digits, like printf("%.15g"). The interpreter's
+ * format_float (compiler/interpreter/src/value.rs) produces the same text. */
+char *kairo_float_to_string(double x) {
+    if (x != x) return (char *)"nan";
+    if (x > 1.7976931348623157e308) return (char *)"inf";
+    if (x < -1.7976931348623157e308) return (char *)"-inf";
+    char buf[40];
+    int n = snprintf(buf, sizeof buf, "%.15g", x);
+    char *out = alloc_str((size_t)n);
+    copy_bytes(out, buf, (size_t)n);
+    return out;
+}
+
+double kairo_int_to_float(i64 v) {
+    return (double)v;
+}
+
+i64 kairo_float_to_int(double x) {
+    if (x != x || x >= 9223372036854775808.0 || x < -9223372036854775808.0) {
+        kairo_fatal("cannot convert Float to Int");
+    }
+    return (i64)x;
+}
+
+/* [+-] digits [. digits] [(e|E) [+-] digits] */
+static int valid_float(const char *s) {
+    size_t i = 0;
+    size_t n;
+    if (s[i] == '+' || s[i] == '-') i++;
+    for (n = 0; s[i] >= '0' && s[i] <= '9'; i++) n++;
+    if (n == 0) return 0;
+    if (s[i] == '.') {
+        i++;
+        for (n = 0; s[i] >= '0' && s[i] <= '9'; i++) n++;
+        if (n == 0) return 0;
+    }
+    if (s[i] == 'e' || s[i] == 'E') {
+        i++;
+        if (s[i] == '+' || s[i] == '-') i++;
+        for (n = 0; s[i] >= '0' && s[i] <= '9'; i++) n++;
+        if (n == 0) return 0;
+    }
+    return s[i] == 0;
+}
+
+double kairo_to_float(const char *s) {
+    if (!valid_float(s)) fatal_with("invalid float: ", s);
+    return strtod(s, (char **)0);
+}
+
+int kairo_is_float(const char *s) {
+    return valid_float(s);
+}

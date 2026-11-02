@@ -105,6 +105,22 @@ pub fn call(name: &str, args: Vec<Value>, program_args: &[String]) -> Result<Val
             program_args.iter().map(|a| Value::String(a.clone())).collect(),
         )),
         ("exit", [Value::Int(code)]) => Err(RuntimeError::Exit(*code as i32)),
+        ("toInt", [Value::Float(x)]) => {
+            if x.is_nan() || *x >= 9223372036854775808.0 || *x < -9223372036854775808.0 {
+                Err(RuntimeError::StdlibError("cannot convert Float to Int".to_string()))
+            } else {
+                Ok(Value::Int(*x as i64))
+            }
+        }
+        ("toFloat", [Value::Int(n)]) => Ok(Value::Float(*n as f64)),
+        ("toFloat", [Value::String(s)]) => {
+            if valid_float(s) {
+                Ok(Value::Float(s.parse::<f64>().unwrap_or(f64::NAN)))
+            } else {
+                Err(RuntimeError::StdlibError(format!("invalid float: \"{s}\"")))
+            }
+        }
+        ("isFloat", [Value::String(s)]) => Ok(Value::Bool(valid_float(s))),
         _ => Err(RuntimeError::TypeError(format!("bad arguments to `{name}`"))),
     }
 }
@@ -126,4 +142,40 @@ fn read_line() -> String {
 /// native runtime).
 fn is_space(c: char) -> bool {
     matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0b' | '\x0c')
+}
+
+/// `[+-] digits [. digits] [(e|E) [+-] digits]` (same grammar as the
+/// native runtime's valid_float).
+fn valid_float(s: &str) -> bool {
+    let b = s.as_bytes();
+    let mut i = 0;
+    let digits = |i: &mut usize| {
+        let start = *i;
+        while *i < b.len() && b[*i].is_ascii_digit() {
+            *i += 1;
+        }
+        *i - start
+    };
+    if i < b.len() && (b[i] == b'+' || b[i] == b'-') {
+        i += 1;
+    }
+    if digits(&mut i) == 0 {
+        return false;
+    }
+    if i < b.len() && b[i] == b'.' {
+        i += 1;
+        if digits(&mut i) == 0 {
+            return false;
+        }
+    }
+    if i < b.len() && (b[i] == b'e' || b[i] == b'E') {
+        i += 1;
+        if i < b.len() && (b[i] == b'+' || b[i] == b'-') {
+            i += 1;
+        }
+        if digits(&mut i) == 0 {
+            return false;
+        }
+    }
+    i == b.len()
 }

@@ -5,3 +5,4 @@
 Cargo.lock.bak
 *.ll
 examples/**/*.exe
+.vscode

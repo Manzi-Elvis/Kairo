@@ -11,6 +11,7 @@ pub enum Type {
     Bool,
     String,
     Unit,
+    Float,
     Struct(String),
     Array(Box<Type>),
     Enum(String),
@@ -23,6 +24,7 @@ impl Type {
             Type::Bool => "Bool".to_string(),
             Type::String => "String".to_string(),
             Type::Unit => "Unit".to_string(),
+            Type::Float => "Float".to_string(),
             Type::Struct(n) => n.clone(),
             Type::Array(inner) => format!("Array<{}>", inner.name()),
             Type::Enum(n) => n.clone(),
@@ -118,7 +120,30 @@ fn btype_to_type(b: BType) -> Type {
         BType::Str => Type::String,
         BType::StrArray => Type::Array(Box::new(Type::String)),
         BType::Unit => Type::Unit,
+        BType::Float => Type::Float,
     }
+}
+
+fn type_to_btype(t: &Type) -> Option<BType> {
+    match t {
+        Type::Int => Some(BType::Int),
+        Type::Float => Some(BType::Float),
+        Type::Bool => Some(BType::Bool),
+        Type::String => Some(BType::Str),
+        Type::Array(inner) if **inner == Type::String => Some(BType::StrArray),
+        _ => None,
+    }
+}
+
+fn describe_overloads(name: &str, candidates: &[&Builtin]) -> String {
+    candidates
+        .iter()
+        .map(|b| {
+            let params: Vec<String> = b.params.iter().map(|p| btype_to_type(*p).name()).collect();
+            format!("{}({})", name, params.join(", "))
+        })
+        .collect::<Vec<_>>()
+        .join(" or ")
 }
 
 impl Default for TypeChecker {
@@ -177,6 +202,7 @@ impl TypeChecker {
             "Bool" => Some(Type::Bool),
             "String" => Some(Type::String),
             "Unit" => Some(Type::Unit),
+            "Float" => Some(Type::Float),
             other if self.struct_names.contains(other) => Some(Type::Struct(other.to_string())),
             other if self.enum_names.contains(other) => Some(Type::Enum(other.to_string())),
             _ => None,
@@ -605,6 +631,7 @@ impl TypeChecker {
         match expr {
             Expr::StringLiteral(_) => Some(Type::String),
             Expr::IntLiteral(_) => Some(Type::Int),
+            Expr::FloatLiteral(_) => Some(Type::Float),
             Expr::BoolLiteral(_) => Some(Type::Bool),
             Expr::Identifier(name) => match scope.get(name) {
                 Some((t, _)) => Some(t.clone()),
@@ -701,15 +728,15 @@ impl TypeChecker {
             Expr::Try(inner) => self.check_try(inner, scope, errors),
             Expr::Unary { op, operand } => {
                 let t = self.eval_expr_type(operand, scope, errors)?;
-                let (expected, symbol) = match op {
-                    UnaryOp::Neg => (Type::Int, "-"),
-                    UnaryOp::Not => (Type::Bool, "!"),
+                let (ok, expected, symbol) = match op {
+                    UnaryOp::Neg => (matches!(t, Type::Int | Type::Float), "Int or Float", "-"),
+                    UnaryOp::Not => (t == Type::Bool, "Bool", "!"),
                 };
-                if t == expected {
+                if ok {
                     Some(t)
                 } else {
                     errors.push(TypeError::Mismatch {
-                        expected: expected.name(),
+                        expected: expected.to_string(),
                         found: t.name(),
                         context: format!("unary `{}`", symbol),
                     });
@@ -733,12 +760,21 @@ impl TypeChecker {
             Add => match (&l, &r) {
                 (Type::String, Type::String) => Some(Type::String),
                 (Type::Int, Type::Int) => Some(Type::Int),
+                (Type::Float, Type::Float) => Some(Type::Float),
                 _ => {
                     errors.push(binary_mismatch("+", &l, &r));
                     None
                 }
             },
-            Sub | Mul | Div | Rem => {
+            Sub | Mul | Div => match (&l, &r) {
+                (Type::Int, Type::Int) => Some(Type::Int),
+                (Type::Float, Type::Float) => Some(Type::Float),
+                _ => {
+                    errors.push(binary_mismatch(op_symbol(op), &l, &r));
+                    None
+                }
+            },
+            Rem => {
                 if l == Type::Int && r == Type::Int {
                     Some(Type::Int)
                 } else {
@@ -762,14 +798,13 @@ impl TypeChecker {
                     None
                 }
             }
-            Lt | Gt | Le | Ge => {
-                if l == Type::Int && r == Type::Int {
-                    Some(Type::Bool)
-                } else {
+            Lt | Gt | Le | Ge => match (&l, &r) {
+                (Type::Int, Type::Int) | (Type::Float, Type::Float) => Some(Type::Bool),
+                _ => {
                     errors.push(binary_mismatch(op_symbol(op), &l, &r));
                     None
                 }
-            }
+            },
         }
     }
 
@@ -854,8 +889,8 @@ impl TypeChecker {
             if callee == "toString" {
                 return self.check_to_string(args, scope, errors);
             }
-            if let Some(b) = kairo_builtins::lookup(callee) {
-                return self.check_builtin_call(b, args, scope, errors);
+            if kairo_builtins::is_builtin(callee) {
+                return self.check_builtin_call(callee, args, scope, errors);
             }
         }
 
@@ -1066,9 +1101,9 @@ impl TypeChecker {
                 self.eval_expr_type(a, scope, errors);
             }
         } else if let Some(t) = self.eval_expr_type(&args[0], scope, errors) {
-            if !matches!(t, Type::Int | Type::Bool | Type::String) {
+            if !matches!(t, Type::Int | Type::Float | Type::Bool | Type::String) {
                 errors.push(TypeError::Mismatch {
-                    expected: "Int, Bool or String".to_string(),
+                    expected: "Int, Float, Bool or String".to_string(),
                     found: t.name(),
                     context: "argument to `toString`".to_string(),
                 });
@@ -1079,32 +1114,57 @@ impl TypeChecker {
 
     fn check_builtin_call(
         &self,
-        b: &Builtin,
+        name: &str,
         args: &[Expr],
         scope: &Scopes,
         errors: &mut Vec<TypeError>,
     ) -> Option<Type> {
-        if args.len() != b.params.len() {
-            errors.push(TypeError::WrongArgCount {
-                callee: b.name.to_string(),
-                expected: b.params.len(),
-                found: args.len(),
-            });
-        }
-        for (i, arg) in args.iter().enumerate() {
-            let found = self.eval_expr_type(arg, scope, errors);
-            if let (Some(found), Some(param)) = (found, b.params.get(i)) {
-                let expected = btype_to_type(*param);
-                if found != expected {
-                    errors.push(TypeError::Mismatch {
-                        expected: expected.name(),
-                        found: found.name(),
-                        context: format!("argument {} to `{}`", i + 1, b.name),
-                    });
+        let found: Vec<Option<Type>> =
+            args.iter().map(|a| self.eval_expr_type(a, scope, errors)).collect();
+        let candidates: Vec<&Builtin> = kairo_builtins::candidates(name).collect();
+
+        // One signature: report precise per-argument errors.
+        if candidates.len() == 1 {
+            let b = candidates[0];
+            if args.len() != b.params.len() {
+                errors.push(TypeError::WrongArgCount {
+                    callee: name.to_string(),
+                    expected: b.params.len(),
+                    found: args.len(),
+                });
+            }
+            for (i, f) in found.iter().enumerate() {
+                if let (Some(f), Some(param)) = (f, b.params.get(i)) {
+                    let expected = btype_to_type(*param);
+                    if *f != expected {
+                        errors.push(TypeError::Mismatch {
+                            expected: expected.name(),
+                            found: f.name(),
+                            context: format!("argument {} to `{}`", i + 1, name),
+                        });
+                    }
                 }
             }
+            return Some(btype_to_type(b.ret));
         }
-        Some(btype_to_type(b.ret))
+
+        // Overloaded: pick the signature by argument types.
+        if found.iter().any(|f| f.is_none()) {
+            return None; // an argument already reported its own error
+        }
+        let types: Vec<Type> = found.into_iter().flatten().collect();
+        let btypes: Option<Vec<BType>> = types.iter().map(type_to_btype).collect();
+        if let Some(btypes) = btypes {
+            if let Some(b) = kairo_builtins::resolve(name, &btypes) {
+                return Some(btype_to_type(b.ret));
+            }
+        }
+        errors.push(TypeError::Mismatch {
+            expected: describe_overloads(name, &candidates),
+            found: types.iter().map(|t| t.name()).collect::<Vec<_>>().join(", "),
+            context: format!("call to `{}`", name),
+        });
+        None
     }
 }
 
@@ -1517,6 +1577,30 @@ mod tests {
     #[test]
     fn catches_exit_with_non_int() {
         let err = check("fn main() { exit(\"x\") }").unwrap_err();
+        assert!(err.iter().any(|e| matches!(e, TypeError::Mismatch { .. })));
+    }
+
+    #[test]
+    fn passes_float_arithmetic_and_conversions() {
+        let source = "fn main() {\n a := 1.5\n b := a * 2.0 + 0.25\n c := -b\n ok := a < b && c <= 0.0\n n := toInt(b)\n f := toFloat(n)\n s := toString(f)\n g := toFloat(\"2.5\")\n print(ok)\n print(toInt(\"7\"))\n print(isFloat(s))\n print(g)\n}";
+        assert_eq!(check(source), Ok(()));
+    }
+
+    #[test]
+    fn catches_mixing_int_and_float() {
+        let err = check("fn main() { x := 1 + 2.5 }").unwrap_err();
+        assert!(err.iter().any(|e| matches!(e, TypeError::Mismatch { .. })));
+    }
+
+    #[test]
+    fn catches_float_remainder() {
+        let err = check("fn main() { x := 5.0 % 2.0 }").unwrap_err();
+        assert!(err.iter().any(|e| matches!(e, TypeError::Mismatch { .. })));
+    }
+
+    #[test]
+    fn catches_bad_overload_argument() {
+        let err = check("fn main() { x := toInt(true) }").unwrap_err();
         assert!(err.iter().any(|e| matches!(e, TypeError::Mismatch { .. })));
     }
 }

@@ -212,6 +212,7 @@ impl<'a> Interpreter<'a> {
             HExpr::StringLiteral(s) => Ok(Value::String(s.clone())),
             HExpr::IntLiteral(i) => Ok(Value::Int(*i)),
             HExpr::BoolLiteral(b) => Ok(Value::Bool(*b)),
+            HExpr::FloatLiteral(x) => Ok(Value::Float(*x)),
 
             HExpr::Identifier(name) => self
                 .lookup(name)
@@ -230,6 +231,7 @@ impl<'a> Interpreter<'a> {
             HExpr::Unary { op, operand } => match (*op, self.eval_expr(operand)?) {
                 (UnaryOp::Neg, Value::Int(i)) => Ok(Value::Int(i.wrapping_neg())),
                 (UnaryOp::Not, Value::Bool(b)) => Ok(Value::Bool(!b)),
+                (UnaryOp::Neg, Value::Float(x)) => Ok(Value::Float(-x)),
                 (UnaryOp::Neg, other) => Err(RuntimeError::TypeError(format!(
                     "cannot negate {}",
                     other.type_name()
@@ -469,18 +471,25 @@ impl<'a> Interpreter<'a> {
         match op {
             Add => match (l, r) {
                 (Value::String(a), Value::String(b)) => Ok(Value::String(a + &b)),
-                (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
-                (a, b) => Err(type_error("+", &a, &b)),
+                (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a.wrapping_add(b))),
+                (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a + b)),
+                (a, b) => Err(binary_type_error("+", &a, &b)),
             },
-            Sub => int_op(l, r, "-", |a, b| Ok(Value::Int(a - b))),
-            Mul => int_op(l, r, "*", |a, b| Ok(Value::Int(a * b))),
-            Div => int_op(l, r, "/", |a, b| {
-                if b == 0 {
-                    Err(RuntimeError::DivisionByZero)
-                } else {
-                    Ok(Value::Int(a / b))
-                }
-            }),
+            Sub => arith(l, r, "-", |a, b| Ok(a.wrapping_sub(b)), |a, b| a - b),
+            Mul => arith(l, r, "*", |a, b| Ok(a.wrapping_mul(b)), |a, b| a * b),
+            Div => arith(
+                l,
+                r,
+                "/",
+                |a, b| {
+                    if b == 0 {
+                        Err(RuntimeError::DivisionByZero)
+                    } else {
+                        Ok(a.wrapping_div(b))
+                    }
+                },
+                |a, b| a / b,
+            ),
             Rem => int_op(l, r, "%", |a, b| {
                 if b == 0 {
                     Err(RuntimeError::DivisionByZero)
@@ -488,13 +497,13 @@ impl<'a> Interpreter<'a> {
                     Ok(Value::Int(a.wrapping_rem(b)))
                 }
             }),
-            And | Or => unreachable!("handled by eval_logical"),
             Eq => Ok(Value::Bool(l == r)),
             NotEq => Ok(Value::Bool(l != r)),
-            Lt => int_op(l, r, "<", |a, b| Ok(Value::Bool(a < b))),
-            Gt => int_op(l, r, ">", |a, b| Ok(Value::Bool(a > b))),
-            Le => int_op(l, r, "<=", |a, b| Ok(Value::Bool(a <= b))),
-            Ge => int_op(l, r, ">=", |a, b| Ok(Value::Bool(a >= b))),
+            Lt => compare(l, r, "<", |a, b| a < b, |a, b| a < b),
+            Gt => compare(l, r, ">", |a, b| a > b, |a, b| a > b),
+            Le => compare(l, r, "<=", |a, b| a <= b, |a, b| a <= b),
+            Ge => compare(l, r, ">=", |a, b| a >= b, |a, b| a >= b),
+            And | Or => unreachable!("handled by eval_logical"),
         }
     }
 
@@ -560,6 +569,7 @@ impl<'a> Interpreter<'a> {
                 return match self.eval_expr(&args[0])? {
                     Value::Int(i) => Ok(Value::String(i.to_string())),
                     Value::Bool(b) => Ok(Value::String(b.to_string())),
+                    Value::Float(x) => Ok(Value::String(crate::value::format_float(x))),
                     Value::String(s) => Ok(Value::String(s)),
                     other => Err(RuntimeError::TypeError(format!(
                         "toString supports Int, Bool and String, found {}",
@@ -671,6 +681,42 @@ fn int_op(
     match (l, r) {
         (Value::Int(a), Value::Int(b)) => f(a, b),
         (a, b) => Err(type_error(op, &a, &b)),
+    }
+}
+
+fn binary_type_error(op: &str, l: &Value, r: &Value) -> RuntimeError {
+    RuntimeError::TypeError(format!(
+        "cannot apply `{op}` to {} and {}",
+        l.type_name(),
+        r.type_name()
+    ))
+}
+
+fn arith(
+    l: Value,
+    r: Value,
+    op: &str,
+    on_ints: impl FnOnce(i64, i64) -> Result<i64, RuntimeError>,
+    on_floats: impl FnOnce(f64, f64) -> f64,
+) -> Result<Value, RuntimeError> {
+    match (l, r) {
+        (Value::Int(a), Value::Int(b)) => on_ints(a, b).map(Value::Int),
+        (Value::Float(a), Value::Float(b)) => Ok(Value::Float(on_floats(a, b))),
+        (a, b) => Err(binary_type_error(op, &a, &b)),
+    }
+}
+
+fn compare(
+    l: Value,
+    r: Value,
+    op: &str,
+    on_ints: fn(i64, i64) -> bool,
+    on_floats: fn(f64, f64) -> bool,
+) -> Result<Value, RuntimeError> {
+    match (l, r) {
+        (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(on_ints(a, b))),
+        (Value::Float(a), Value::Float(b)) => Ok(Value::Bool(on_floats(a, b))),
+        (a, b) => Err(binary_type_error(op, &a, &b)),
     }
 }
 
@@ -1193,5 +1239,98 @@ mod tests {
             run_and_capture("fn main() { print(len(args())) }").unwrap(),
             vec!["0".to_string()]
         );
+    }
+
+    #[test]
+    fn runs_float_arithmetic_and_printing() {
+        let source = r#"
+            fn main() {
+                print(1.5 + 2.25)
+                print(10.0 / 4.0)
+                print(2.0 * 3.0)
+                print(-0.5)
+                print(1.0 / 3.0)
+                print(100.0)
+                print(0.1 + 0.2)
+                print(1e21)
+                print(0.00001)
+                print(1.0 < 2.5)
+                print(2.5 == 2.5)
+            }
+        "#;
+        let expected: Vec<String> = [
+            "3.75", "2.5", "6", "-0.5", "0.333333333333333", "100", "0.3", "1e+21", "1e-05",
+            "true", "true",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert_eq!(run_and_capture(source).unwrap(), expected);
+    }
+
+    #[test]
+    fn converts_between_ints_floats_and_strings() {
+        let source = r#"
+            fn main() {
+                print(toFloat(3) / 2.0)
+                print(toInt(7.9))
+                print(toInt(-7.9))
+                print(toFloat("2.50") + 1.0)
+                print(isFloat("1e3"))
+                print(isFloat("1."))
+                print(isFloat(".5"))
+                print(isFloat("abc"))
+                print(toString(2.0) + "!")
+            }
+        "#;
+        let expected: Vec<String> =
+            ["1.5", "7", "-7", "3.5", "true", "false", "false", "false", "2!"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+        assert_eq!(run_and_capture(source).unwrap(), expected);
+    }
+
+    #[test]
+    fn float_division_by_zero_is_infinity() {
+        let source = "fn main() { print(1.0 / 0.0)\nprint(-1.0 / 0.0)\nprint(0.0 / 0.0 == 0.0 / 0.0) }";
+        assert_eq!(
+            run_and_capture(source).unwrap(),
+            vec!["inf".to_string(), "-inf".to_string(), "false".to_string()]
+        );
+    }
+
+    #[test]
+    fn reports_invalid_float() {
+        let err = run_and_capture("fn main() { x := toFloat(\"abc\") }").unwrap_err();
+        assert!(matches!(err, RuntimeError::StdlibError(_)));
+    }
+
+    #[test]
+    fn reports_float_to_int_overflow() {
+        let err = run_and_capture("fn main() { x := toInt(1e300) }").unwrap_err();
+        assert!(matches!(err, RuntimeError::StdlibError(_)));
+    }
+
+    #[test]
+    fn integer_arithmetic_wraps_instead_of_panicking() {
+        assert_eq!(
+            run_and_capture("fn main() { print(9223372036854775807 + 1) }").unwrap(),
+            vec!["-9223372036854775808".to_string()]
+        );
+    }
+
+    #[test]
+    fn formats_floats_like_printf_g15() {
+        use crate::value::format_float;
+        assert_eq!(format_float(0.0), "0");
+        assert_eq!(format_float(-0.0), "-0");
+        assert_eq!(format_float(123456.789), "123456.789");
+        assert_eq!(format_float(1e15), "1e+15");
+        assert_eq!(format_float(123456789012345.0), "123456789012345");
+        assert_eq!(format_float(0.0001), "0.0001");
+        assert_eq!(format_float(1.5e-7), "1.5e-07");
+        assert_eq!(format_float(f64::INFINITY), "inf");
+        assert_eq!(format_float(f64::NAN), "nan");
     }
 }
