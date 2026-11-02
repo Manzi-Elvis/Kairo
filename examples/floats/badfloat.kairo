@@ -1,0 +1,5 @@
+fn main() {
+    print("start")
+    print(toFloat("abc"))
+    print("never printed")
+}

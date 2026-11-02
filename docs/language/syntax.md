@@ -711,3 +711,43 @@ Runtime errors (including the earlier ones such as division by zero or
 an index out of bounds) are now printed to **stderr** by both the
 interpreter and native programs, and the exit status is 1. Anything the
 program printed before the error is still on stdout.
+
+
+---
+
+# Kairo v0.29: Float
+
+`Float` is a 64-bit IEEE 754 double.
+
+## Syntax
+- Literals: `3.14`, `0.5`, `2e3`, `1.5e-2`. A dot needs digits on both
+  sides, so `0..3` is still a range.
+- Arithmetic `+ - * /`, comparisons, and unary `-` work on floats.
+  There is no `%` for floats.
+- There is no implicit conversion: `1 + 2.5` is a type error. Convert
+  explicitly with the functions below.
+
+## Semantics
+- Division by zero follows IEEE 754 (`inf`, `-inf`, `nan`); it is not an
+  error. `nan` is not equal to anything, including itself.
+- Floats print with up to 15 significant digits, like C's `%.15g`:
+  `0.1 + 0.2` prints `0.3`, `1e21` prints `1e+21`, `0.00001` prints
+  `1e-05`. `toString` uses the same format, in the interpreter and in
+  native programs.
+
+## Standard library
+| Function | Description |
+|---|---|
+| `toFloat(n: Int) -> Float` | Converts an integer. |
+| `toFloat(s: String) -> Float` | Parses `[+-]digits[.digits][e[+-]digits]`; anything else is a runtime error. |
+| `isFloat(s: String) -> Bool` | True when `toFloat(s)` would succeed. |
+| `toInt(x: Float) -> Int` | Truncates toward zero. A runtime error for `nan` or values outside the 64-bit range. |
+| `toString(x: Float) -> String` | Formats as above. |
+
+`toInt` and `toFloat` are overloaded: the compiler picks the version
+from the argument type.
+
+## Other changes
+- Integer `+ - * /` now wrap on overflow in the interpreter, matching
+  native programs (it used to panic in debug builds).
+- An integer literal that doesn't fit in 64 bits is now a lexer error.
