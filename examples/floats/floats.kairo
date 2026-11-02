@@ -1,0 +1,39 @@
+struct Point {
+    x: Float,
+    y: Float
+}
+
+fn distanceSquared(a: Point, b: Point) -> Float {
+    dx := a.x - b.x
+    dy := a.y - b.y
+    return dx * dx + dy * dy
+}
+
+fn celsiusToFahrenheit(c: Float) -> Float {
+    return c * 9.0 / 5.0 + 32.0
+}
+
+fn main() {
+    print(celsiusToFahrenheit(100.0))
+    print(celsiusToFahrenheit(-40.0))
+    print(celsiusToFahrenheit(36.6))
+
+    readings := [21.5, 19.0, 23.25, 20.75]
+    mut total := 0.0
+    for r in readings {
+        total = total + r
+    }
+    average := total / toFloat(len(readings))
+    print("average: " + toString(average))
+
+    p := Point { x: 1.5, y: 2.0 }
+    q := Point { x: 4.5, y: 6.0 }
+    print(distanceSquared(p, q))
+
+    print(toInt(average * 10.0))
+    print(toFloat("3.25") * 2.0)
+    print(0.1 + 0.2)
+    print(1.0 / 0.0)
+    print(isFloat("1e3"))
+    print(100000000.0 * 100000000.0 * 100000000.0)
+}

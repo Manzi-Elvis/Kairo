@@ -1,7 +1,7 @@
 # Runs every single-file example through the interpreter and through the
 # native compiler, and checks that both agree on stdout and exit code.
 # Runtime errors go to stderr in both backends, so they are not compared.
-$dirs = 'examples/native', 'examples/scoping', 'examples/operators', 'examples/iteration', 'examples/stdlib', 'examples/files'
+$dirs = 'examples/native', 'examples/scoping', 'examples/operators', 'examples/iteration', 'examples/stdlib', 'examples/files', 'examples/floats'
 $failures = 0
 
 foreach ($dir in $dirs) {

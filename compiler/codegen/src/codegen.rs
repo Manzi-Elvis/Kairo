@@ -44,6 +44,7 @@ pub enum CodegenError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum LType {
     Int,
+    Float,
     I1,
     Str,
     Struct(String),
@@ -56,6 +57,7 @@ impl LType {
     fn llvm(&self) -> String {
         match self {
             LType::Int => "i64".to_string(),
+            LType::Float => "double".to_string(),
             LType::I1 => "i1".to_string(),
             LType::Str => "i8*".to_string(),
             LType::Struct(name) => format!("%{name}*"),
@@ -72,6 +74,7 @@ impl LType {
     ) -> Result<Self, CodegenError> {
         match name {
             "Int" => Ok(LType::Int),
+            "Float" => Ok(LType::Float),
             "Bool" => Ok(LType::I1),
             "String" => Ok(LType::Str),
             other if struct_names.contains(other) => Ok(LType::Struct(other.to_string())),
@@ -185,6 +188,7 @@ pub fn generate(program: &HProgram) -> Result<String, CodegenError> {
         
     out.push("declare i8* @kairo_int_to_string(i64)".to_string());
     out.push("declare i8* @kairo_bool_to_string(i32)".to_string());
+    out.push("declare i8* @kairo_float_to_string(double)".to_string());
     for b in kairo_builtins::BUILTINS {
         out.push(builtin_declaration(b));
     }
@@ -323,7 +327,7 @@ fn collect_in_expr(expr: &HExpr, found: &mut Vec<String>) {
                 found.push(s.clone());
             }
         }
-        HExpr::IntLiteral(_) | HExpr::BoolLiteral(_) | HExpr::Identifier(_) => {}
+        HExpr::IntLiteral(_) | HExpr::BoolLiteral(_) | HExpr::Identifier(_) | HExpr::FloatLiteral(_) => {}
         HExpr::Binary { left, right, .. } => {
             collect_in_expr(left, found);
             collect_in_expr(right, found);
@@ -359,9 +363,21 @@ fn btype_to_ltype(b: BType) -> LType {
     match b {
         BType::Int => LType::Int,
         BType::Bool => LType::I1,
+        BType::Float => LType::Float,
         BType::Str => LType::Str,
         BType::StrArray => LType::Array(Box::new(LType::Str)),
         BType::Unit => LType::Void,
+    }
+}
+
+fn ltype_to_btype(t: &LType) -> Option<BType> {
+    match t {
+        LType::Int => Some(BType::Int),
+        LType::Float => Some(BType::Float),
+        LType::I1 => Some(BType::Bool),
+        LType::Str => Some(BType::Str),
+        LType::Array(inner) if **inner == LType::Str => Some(BType::StrArray),
+        _ => None,
     }
 }
 
@@ -420,12 +436,23 @@ impl<'a> FnCodegen<'a> {
 
     fn gen_builtin_call(
         &mut self,
-        b: &Builtin,
+        name: &str,
         args: &[HExpr],
     ) -> Result<(String, LType), CodegenError> {
+        let mut vals = Vec::with_capacity(args.len());
+        for arg in args {
+            vals.push(self.gen_expr(arg)?);
+        }
+
+        let btypes: Option<Vec<BType>> = vals.iter().map(|(_, ty)| ltype_to_btype(ty)).collect();
+        let b = btypes
+            .and_then(|bt| kairo_builtins::resolve(name, &bt))
+            .ok_or_else(|| {
+                CodegenError::UnsupportedFeature(format!("no matching signature for `{name}`"))
+            })?;
+
         let mut arg_strs = Vec::new();
-        for (arg, param) in args.iter().zip(b.params) {
-            let (val, ty) = self.gen_expr(arg)?;
+        for ((val, ty), param) in vals.iter().zip(b.params) {
             if *param == BType::Bool {
                 let wide = self.fresh_temp();
                 self.emit(format!("  {wide} = zext i1 {val} to i32"));
@@ -475,6 +502,11 @@ impl<'a> FnCodegen<'a> {
                 self.emit(format!("  {wide} = zext i1 {val} to i32"));
                 let t = self.fresh_temp();
                 self.emit(format!("  {t} = call i8* @kairo_bool_to_string(i32 {wide})"));
+                Ok((t, LType::Str))
+            }
+            LType::Float => {
+                let t = self.fresh_temp();
+                self.emit(format!("  {t} = call i8* @kairo_float_to_string(double {val})"));
                 Ok((t, LType::Str))
             }
             LType::Str => Ok((val, LType::Str)),
@@ -565,6 +597,7 @@ impl<'a> FnCodegen<'a> {
             match &ret_ty {
                 LType::Void => self.lines.push("  ret void".to_string()),
                 LType::Int => self.lines.push("  ret i64 0".to_string()),
+                LType::Float => self.lines.push("  ret double 0.0".to_string()),
                 LType::I1 => self.lines.push("  ret i1 0".to_string()),
                 LType::Str => self.lines.push("  ret i8* null".to_string()),
                 LType::Struct(name) => self.lines.push(format!("  ret %{name}* null")),
@@ -742,6 +775,7 @@ impl<'a> FnCodegen<'a> {
     fn gen_expr(&mut self, expr: &HExpr) -> Result<(String, LType), CodegenError> {
         match expr {
             HExpr::IntLiteral(v) => Ok((v.to_string(), LType::Int)),
+            HExpr::FloatLiteral(x) => Ok((format!("0x{:016X}", x.to_bits()), LType::Float)),
             HExpr::BoolLiteral(b) => Ok((if *b { "1" } else { "0" }.to_string(), LType::I1)),
             HExpr::StringLiteral(s) => {
                 let (label, len) = self
@@ -1242,6 +1276,24 @@ impl<'a> FnCodegen<'a> {
 
         use BinaryOp::*;
         match op {
+            _ if lty == LType::Float => {
+                let t = self.fresh_temp();
+                let (instr, ty) = match op {
+                    Add => (format!("fadd double {l}, {r}"), LType::Float),
+                    Sub => (format!("fsub double {l}, {r}"), LType::Float),
+                    Mul => (format!("fmul double {l}, {r}"), LType::Float),
+                    Div => (format!("fdiv double {l}, {r}"), LType::Float),
+                    Lt => (format!("fcmp olt double {l}, {r}"), LType::I1),
+                    Gt => (format!("fcmp ogt double {l}, {r}"), LType::I1),
+                    Le => (format!("fcmp ole double {l}, {r}"), LType::I1),
+                    Ge => (format!("fcmp oge double {l}, {r}"), LType::I1),
+                    Eq => (format!("fcmp oeq double {l}, {r}"), LType::I1),
+                    NotEq => (format!("fcmp une double {l}, {r}"), LType::I1),
+                    Rem | And | Or => unreachable!("rejected by the type checker"),
+                };
+                self.emit(format!("  {t} = {instr}"));
+                Ok((t, ty))
+            }
             Eq | NotEq if matches!(lty, LType::Struct(_) | LType::Enum(_) | LType::Array(_)) => {
                 Err(CodegenError::UnsupportedFeature(
                     "struct/enum/array equality is not yet supported in native codegen".to_string(),
@@ -1393,6 +1445,18 @@ impl<'a> FnCodegen<'a> {
                         "  {t} = call i32 (i8*, ...) @printf(i8* {fmt_ptr}, i8* {val})"
                     ));
                 }
+                LType::Float => {
+                    let s = self.fresh_temp();
+                    self.emit(format!("  {s} = call i8* @kairo_float_to_string(double {val})"));
+                    let fmt_ptr = self.fresh_temp();
+                    self.emit(format!(
+                        "  {fmt_ptr} = getelementptr [4 x i8], [4 x i8]* @.str_fmt, i32 0, i32 0"
+                    ));
+                    let t = self.fresh_temp();
+                    self.emit(format!(
+                        "  {t} = call i32 (i8*, ...) @printf(i8* {fmt_ptr}, i8* {s})"
+                    ));
+                }
                 LType::Struct(_) | LType::Enum(_) | LType::Array(_) => {
                     return Err(CodegenError::UnsupportedFeature(
                         "print of struct/enum/array values is not yet supported in native codegen"
@@ -1512,8 +1576,8 @@ impl<'a> FnCodegen<'a> {
             if callee == "toString" {
                 return self.gen_to_string(args);
             }
-            if let Some(b) = kairo_builtins::lookup(callee) {
-                return self.gen_builtin_call(b, args);
+            if kairo_builtins::is_builtin(callee) {
+                return self.gen_builtin_call(callee, args);
             }
         }
 
@@ -1580,9 +1644,13 @@ impl<'a> FnCodegen<'a> {
     }
 
     fn gen_unary(&mut self, op: UnaryOp, operand: &HExpr) -> Result<(String, LType), CodegenError> {
-        let (v, _) = self.gen_expr(operand)?;
+        let (v, ty) = self.gen_expr(operand)?;
         let t = self.fresh_temp();
         match op {
+            UnaryOp::Neg if ty == LType::Float => {
+                self.emit(format!("  {t} = fneg double {v}"));
+                Ok((t, LType::Float))
+            }
             UnaryOp::Neg => {
                 self.emit(format!("  {t} = sub i64 0, {v}"));
                 Ok((t, LType::Int))
@@ -1870,5 +1938,31 @@ mod tests {
         let ir = gen_source("fn main() { print(10 / 2) }").unwrap();
         assert!(ir.contains("call void @kairo_fatal(i8*"));
         assert!(!ir.contains("call void @exit(i32 1)"));
+    }
+
+    #[test]
+    fn generates_float_arithmetic() {
+        let ir = gen_source("fn main() { x := 1.5 * 2.0 + 0.25\nprint(x < 4.0) }").unwrap();
+        assert!(ir.contains("fmul double"));
+        assert!(ir.contains("fadd double"));
+        assert!(ir.contains("fcmp olt double"));
+        assert!(ir.contains("0x3FF8000000000000"));
+    }
+
+    #[test]
+    fn generates_float_printing_and_conversions() {
+        let source = "fn main() { x := toFloat(3)\nprint(x)\nprint(toInt(x))\nprint(toFloat(\"2.5\")) }";
+        let ir = gen_source(source).unwrap();
+        assert!(ir.contains("call double @kairo_int_to_float(i64"));
+        assert!(ir.contains("call i64 @kairo_float_to_int(double"));
+        assert!(ir.contains("call double @kairo_to_float(i8*"));
+        assert!(ir.contains("call i8* @kairo_float_to_string(double"));
+    }
+
+    #[test]
+    fn float_division_has_no_zero_check() {
+        let ir = gen_source("fn main() { print(1.0 / 0.0) }").unwrap();
+        assert!(ir.contains("fdiv double"));
+        assert!(!ir.contains("divzero"));
     }
 }

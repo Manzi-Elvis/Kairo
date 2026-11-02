@@ -122,6 +122,7 @@ pub enum Stmt {
 pub enum Expr {
     StringLiteral(String),
     IntLiteral(i64),
+    FloatLiteral(String),
     BoolLiteral(bool),
     Identifier(String),
     Binary {
