@@ -1,25 +1,22 @@
 /* Kairo native runtime.
  *
  * `kairo build` compiles this file together with the generated LLVM IR.
- * It is deliberately header-free: the few libc functions it needs are
- * declared by hand, so building needs only a working clang and C runtime
- * library, not the system headers. Behavior must match the interpreter's
- * implementations in compiler/interpreter/src/stdlib.rs exactly.
- */
+ * Standard C headers provide the required library declarations.
+ * Behavior must match the interpreter's implementations in
+ * compiler/interpreter/src/stdlib.rs exactly.
+*/
 
-typedef __SIZE_TYPE__ size_t;
+#define _CRT_SECURE_NO_WARNINGS
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include <string.h>
+#include <math.h>
+
 typedef long long i64;
 typedef unsigned long long u64;
-
-extern void *malloc(size_t);
-extern void exit(int);
-extern int getchar(void);
-extern size_t strlen(const char *);
-extern void *fopen(const char *, const char *);
-extern size_t fread(void *, size_t, size_t, void *);
-extern size_t fwrite(const void *, size_t, size_t, void *);
-extern int fclose(void *);
-extern int remove(const char *);
 
 #ifdef _WIN32
 extern int _write(int, const void *, unsigned int);
@@ -377,9 +374,6 @@ void kairo_exit(i64 code) {
 
 /* ---- Float ---- */
 
-extern int snprintf(char *, size_t, const char *, ...);
-extern double strtod(const char *, char **);
-
 /* Up to 15 significant digits, like printf("%.15g"). The interpreter's
  * format_float (compiler/interpreter/src/value.rs) produces the same text. */
 char *kairo_float_to_string(double x) {
@@ -435,18 +429,6 @@ int kairo_is_float(const char *s) {
 }
 
 /* ---- math ---- */
-
-extern double sqrt(double);
-extern double pow(double, double);
-extern double floor(double);
-extern double ceil(double);
-extern double round(double);
-extern double sin(double);
-extern double cos(double);
-extern double tan(double);
-extern double exp(double);
-extern double log(double);
-extern double atan2(double, double);
 
 double kairo_sqrt(double x) { return sqrt(x); }
 double kairo_pow(double x, double y) { return pow(x, y); }
