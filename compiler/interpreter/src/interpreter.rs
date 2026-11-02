@@ -1333,4 +1333,47 @@ mod tests {
         assert_eq!(format_float(f64::INFINITY), "inf");
         assert_eq!(format_float(f64::NAN), "nan");
     }
+
+    #[test]
+    fn runs_math_functions() {
+        let source = r#"
+            fn main() {
+                print(sqrt(16.0))
+                print(pow(2.0, 10.0))
+                print(floor(-1.5))
+                print(ceil(1.2))
+                print(round(2.5))
+                print(round(-2.5))
+                print(abs(-7))
+                print(abs(-2.5))
+                print(min(3, 9))
+                print(max(3, 9))
+                print(min(1.5, 0.5))
+                print(max(1.5, 0.5))
+                print(sqrt(2.0))
+                print(pi())
+                print(atan2(1.0, 1.0) * 4.0)
+                print(exp(0.0))
+                print(log(1.0))
+                print(sqrt(-1.0))
+            }
+        "#;
+        let expected: Vec<String> = [
+            "4", "1024", "-2", "2", "3", "-3", "7", "2.5", "3", "9", "0.5", "1.5",
+            "1.4142135623731", "3.14159265358979", "3.14159265358979", "1", "0", "nan",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert_eq!(run_and_capture(source).unwrap(), expected);
+    }
+
+    #[test]
+    fn abs_of_min_int_wraps() {
+        let source = "fn main() { print(abs(-9223372036854775807 - 1)) }";
+        assert_eq!(
+            run_and_capture(source).unwrap(),
+            vec!["-9223372036854775808".to_string()]
+        );
+    }
 }
