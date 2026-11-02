@@ -1965,4 +1965,16 @@ mod tests {
         assert!(ir.contains("fdiv double"));
         assert!(!ir.contains("divzero"));
     }
+
+    #[test]
+    fn generates_math_calls() {
+        let source = "fn main() { print(sqrt(2.0))\nprint(abs(-3))\nprint(abs(-1.5))\nprint(max(1, 2))\nprint(max(1.0, 2.0))\nprint(pi()) }";
+        let ir = gen_source(source).unwrap();
+        assert!(ir.contains("call double @kairo_sqrt(double"));
+        assert!(ir.contains("call i64 @kairo_abs_int(i64"));
+        assert!(ir.contains("call double @kairo_abs_float(double"));
+        assert!(ir.contains("call i64 @kairo_max_int(i64"));
+        assert!(ir.contains("call double @kairo_max_float(double"));
+        assert!(ir.contains("call double @kairo_pi()"));
+    }
 }

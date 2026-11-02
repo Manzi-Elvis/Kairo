@@ -1603,4 +1603,22 @@ mod tests {
         let err = check("fn main() { x := toInt(true) }").unwrap_err();
         assert!(err.iter().any(|e| matches!(e, TypeError::Mismatch { .. })));
     }
+
+    #[test]
+    fn passes_math_function_calls() {
+        let source = "fn main() {\n a := sqrt(2.0) + pow(2.0, 10.0) - floor(1.5) + ceil(0.2) + round(2.5)\n b := abs(-3) + min(1, 2) + max(4, 5)\n c := abs(-1.5) + min(1.0, 2.0) + max(3.0, 4.0) + pi()\n d := sin(0.0) + cos(0.0) + tan(0.0) + atan2(1.0, 1.0) + exp(1.0) + log(10.0)\n print(a)\n print(b)\n print(c)\n print(d)\n}";
+        assert_eq!(check(source), Ok(()));
+    }
+
+    #[test]
+    fn catches_math_with_wrong_types() {
+        let err = check("fn main() { x := sqrt(4) }").unwrap_err();
+        assert!(err.iter().any(|e| matches!(e, TypeError::Mismatch { .. })));
+    }
+
+    #[test]
+    fn catches_mixed_min_arguments() {
+        let err = check("fn main() { x := min(1, 2.0) }").unwrap_err();
+        assert!(err.iter().any(|e| matches!(e, TypeError::Mismatch { .. })));
+    }
 }

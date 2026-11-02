@@ -126,12 +126,12 @@ fn build_command(args: &[String]) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let status = std::process::Command::new("clang")
-        .arg(&ll_path)
-        .arg(&runtime_path)
-        .arg("-o")
-        .arg(&exe_path)
-        .status();
+    let mut clang = std::process::Command::new("clang");
+    clang.arg(&ll_path).arg(&runtime_path).arg("-o").arg(&exe_path);
+    if !cfg!(windows) {
+        clang.arg("-lm");
+    }
+    let status = clang.status();
     let _ = std::fs::remove_file(&runtime_path);
     match status {
         Ok(s) if s.success() => {
