@@ -433,3 +433,39 @@ double kairo_to_float(const char *s) {
 int kairo_is_float(const char *s) {
     return valid_float(s);
 }
+
+/* ---- math ---- */
+
+extern double sqrt(double);
+extern double pow(double, double);
+extern double floor(double);
+extern double ceil(double);
+extern double round(double);
+extern double sin(double);
+extern double cos(double);
+extern double tan(double);
+extern double exp(double);
+extern double log(double);
+extern double atan2(double, double);
+
+double kairo_sqrt(double x) { return sqrt(x); }
+double kairo_pow(double x, double y) { return pow(x, y); }
+double kairo_floor(double x) { return floor(x); }
+double kairo_ceil(double x) { return ceil(x); }
+double kairo_round(double x) { return round(x); }
+double kairo_sin(double x) { return sin(x); }
+double kairo_cos(double x) { return cos(x); }
+double kairo_tan(double x) { return tan(x); }
+double kairo_exp(double x) { return exp(x); }
+double kairo_log(double x) { return log(x); }
+double kairo_atan2(double y, double x) { return atan2(y, x); }
+
+double kairo_abs_float(double x) { return __builtin_fabs(x); }
+i64 kairo_abs_int(i64 v) { return v < 0 ? (i64)(0 - (u64)v) : v; }
+
+i64 kairo_min_int(i64 a, i64 b) { return a < b ? a : b; }
+i64 kairo_max_int(i64 a, i64 b) { return a > b ? a : b; }
+double kairo_min_float(double a, double b) { return a < b ? a : b; }
+double kairo_max_float(double a, double b) { return a > b ? a : b; }
+
+double kairo_pi(void) { return 3.141592653589793; }
