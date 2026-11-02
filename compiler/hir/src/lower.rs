@@ -229,6 +229,7 @@ impl Lowerer {
             ast::Expr::IntLiteral(v) => HExpr::IntLiteral(*v),
             ast::Expr::BoolLiteral(v) => HExpr::BoolLiteral(*v),
             ast::Expr::Identifier(n) => HExpr::Identifier(n.clone()),
+            ast::Expr::FloatLiteral(text) => HExpr::FloatLiteral(text.parse().unwrap_or(f64::NAN)),
             ast::Expr::Binary { left, op, right } => HExpr::Binary {
                 left: Box::new(self.lower_expr(left)),
                 op: *op,
@@ -514,5 +515,14 @@ mod tests {
         let body = &hir.functions[0].body;
         assert_eq!(body.len(), 4); // a, array copy, index, while
         assert!(matches!(body[3], HStmt::While { .. }));
+    }
+
+    #[test]
+    fn lowers_float_literal() {
+        let hir = lower_source("fn main() { x := 2.5 }");
+        let HStmt::VariableDecl { value, .. } = &hir.functions[0].body[0] else {
+            panic!("expected VariableDecl");
+        };
+        assert_eq!(*value, HExpr::FloatLiteral(2.5));
     }
 }

@@ -65,6 +65,7 @@ pub enum HExpr {
     IntLiteral(i64),
     BoolLiteral(bool),
     Identifier(String),
+    FloatLiteral(f64),
     Binary {
         left: Box<HExpr>,
         op: BinaryOp,

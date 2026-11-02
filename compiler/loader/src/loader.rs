@@ -181,7 +181,7 @@ impl<'a> Checker<'a> {
     fn check_expr(&self, expr: &kairo_ast::Expr, current: &LoadedModule) -> Result<(), LoadError> {
         use kairo_ast::Expr::*;
         match expr {
-            StringLiteral(_) | IntLiteral(_) | BoolLiteral(_) | Identifier(_) => Ok(()),
+            StringLiteral(_) | IntLiteral(_) | BoolLiteral(_) | Identifier(_)| FloatLiteral(_) => Ok(()),
             Binary { left, right, .. } => {
                 self.check_expr(left, current)?;
                 self.check_expr(right, current)

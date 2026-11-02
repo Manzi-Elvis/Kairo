@@ -3,6 +3,9 @@
 //! `toString`) are special-cased in the type checker, interpreter and
 //! codegen instead.
 //!
+//! A name may appear in several rows (overloads): the type checker and
+//! codegen pick the row whose parameter types match the arguments.
+//!
 //! Adding a function: add a row here, implement it in the interpreter
 //! (compiler/interpreter/src/stdlib.rs) and in the native runtime
 //! (compiler/codegen/runtime/kairo_runtime.c) with identical behavior.
@@ -10,6 +13,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BType {
     Int,
+    Float,
     Bool,
     Str,
     StrArray,
@@ -27,9 +31,15 @@ pub struct Builtin {
 }
 
 pub const BUILTINS: &[Builtin] = &[
+    // input and conversion
     Builtin { name: "input", params: &[], ret: BType::Str, c_symbol: "kairo_input" },
     Builtin { name: "toInt", params: &[BType::Str], ret: BType::Int, c_symbol: "kairo_to_int" },
+    Builtin { name: "toInt", params: &[BType::Float], ret: BType::Int, c_symbol: "kairo_float_to_int" },
     Builtin { name: "isInt", params: &[BType::Str], ret: BType::Bool, c_symbol: "kairo_is_int" },
+    Builtin { name: "toFloat", params: &[BType::Int], ret: BType::Float, c_symbol: "kairo_int_to_float" },
+    Builtin { name: "toFloat", params: &[BType::Str], ret: BType::Float, c_symbol: "kairo_to_float" },
+    Builtin { name: "isFloat", params: &[BType::Str], ret: BType::Bool, c_symbol: "kairo_is_float" },
+    // strings
     Builtin { name: "substring", params: &[BType::Str, BType::Int, BType::Int], ret: BType::Str, c_symbol: "kairo_substring" },
     Builtin { name: "contains", params: &[BType::Str, BType::Str], ret: BType::Bool, c_symbol: "kairo_contains" },
     Builtin { name: "indexOf", params: &[BType::Str, BType::Str], ret: BType::Int, c_symbol: "kairo_index_of" },
@@ -41,6 +51,7 @@ pub const BUILTINS: &[Builtin] = &[
     Builtin { name: "replace", params: &[BType::Str, BType::Str, BType::Str], ret: BType::Str, c_symbol: "kairo_replace" },
     Builtin { name: "split", params: &[BType::Str, BType::Str], ret: BType::StrArray, c_symbol: "kairo_split" },
     Builtin { name: "join", params: &[BType::StrArray, BType::Str], ret: BType::Str, c_symbol: "kairo_join" },
+    // files, arguments, exit
     Builtin { name: "readFile", params: &[BType::Str], ret: BType::Str, c_symbol: "kairo_read_file" },
     Builtin { name: "writeFile", params: &[BType::Str, BType::Str], ret: BType::Unit, c_symbol: "kairo_write_file" },
     Builtin { name: "appendFile", params: &[BType::Str, BType::Str], ret: BType::Unit, c_symbol: "kairo_append_file" },
@@ -50,8 +61,23 @@ pub const BUILTINS: &[Builtin] = &[
     Builtin { name: "exit", params: &[BType::Int], ret: BType::Unit, c_symbol: "kairo_exit" },
 ];
 
+/// The first row with this name.
 pub fn lookup(name: &str) -> Option<&'static Builtin> {
     BUILTINS.iter().find(|b| b.name == name)
+}
+
+pub fn is_builtin(name: &str) -> bool {
+    BUILTINS.iter().any(|b| b.name == name)
+}
+
+/// All rows with this name (its overloads).
+pub fn candidates(name: &str) -> impl Iterator<Item = &'static Builtin> + '_ {
+    BUILTINS.iter().filter(move |b| b.name == name)
+}
+
+/// The overload whose parameter types are exactly `args`.
+pub fn resolve(name: &str, args: &[BType]) -> Option<&'static Builtin> {
+    candidates(name).find(|b| b.params == args)
 }
 
 #[cfg(test)]
@@ -59,10 +85,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn names_are_unique() {
-        let mut seen = std::collections::HashSet::new();
+    fn signatures_are_unique() {
+        let mut seen = Vec::new();
         for b in BUILTINS {
-            assert!(seen.insert(b.name), "duplicate builtin {}", b.name);
+            let key = (b.name, b.params);
+            assert!(!seen.contains(&key), "duplicate signature for {}", b.name);
+            seen.push(key);
         }
     }
 
@@ -72,12 +100,19 @@ mod tests {
         assert!(lookup("nope").is_none());
     }
 
-     #[test]
+    #[test]
     fn c_symbols_are_unique_and_namespaced() {
         let mut seen = std::collections::HashSet::new();
         for b in BUILTINS {
             assert!(b.c_symbol.starts_with("kairo_"));
             assert!(seen.insert(b.c_symbol), "duplicate symbol {}", b.c_symbol);
         }
+    }
+
+    #[test]
+    fn resolves_overloads_by_argument_types() {
+        assert_eq!(resolve("toInt", &[BType::Str]).unwrap().c_symbol, "kairo_to_int");
+        assert_eq!(resolve("toInt", &[BType::Float]).unwrap().c_symbol, "kairo_float_to_int");
+        assert!(resolve("toInt", &[BType::Bool]).is_none());
     }
 }
