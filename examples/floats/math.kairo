@@ -1,0 +1,30 @@
+fn hypotenuse(a: Float, b: Float) -> Float {
+    return sqrt(a * a + b * b)
+}
+
+fn roundTo(x: Float, places: Int) -> Float {
+    factor := pow(10.0, toFloat(places))
+    return round(x * factor) / factor
+}
+
+fn circleArea(radius: Float) -> Float {
+    return pi() * radius * radius
+}
+
+fn main() {
+    print(hypotenuse(3.0, 4.0))
+    print(roundTo(3.14159, 2))
+    print(roundTo(1234.5678, 1))
+    print(circleArea(2.0))
+    print(floor(-3.5))
+    print(ceil(-3.5))
+    print(abs(-42))
+    print(abs(-0.25))
+    print(min(10, 3) + max(10, 3))
+    print(max(0.5, 0.25))
+    print(toInt(sqrt(toFloat(144))))
+    print(exp(1.0))
+    print(log(100.0) / log(10.0))
+    print(sin(pi() / 2.0))
+    print(sqrt(-4.0))
+}

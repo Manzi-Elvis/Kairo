@@ -121,6 +121,28 @@ pub fn call(name: &str, args: Vec<Value>, program_args: &[String]) -> Result<Val
             }
         }
         ("isFloat", [Value::String(s)]) => Ok(Value::Bool(valid_float(s))),
+        ("sqrt", [Value::Float(x)]) => Ok(Value::Float(x.sqrt())),
+        ("pow", [Value::Float(x), Value::Float(y)]) => Ok(Value::Float(x.powf(*y))),
+        ("floor", [Value::Float(x)]) => Ok(Value::Float(x.floor())),
+        ("ceil", [Value::Float(x)]) => Ok(Value::Float(x.ceil())),
+        ("round", [Value::Float(x)]) => Ok(Value::Float(x.round())),
+        ("abs", [Value::Int(n)]) => Ok(Value::Int(n.wrapping_abs())),
+        ("abs", [Value::Float(x)]) => Ok(Value::Float(x.abs())),
+        ("min", [Value::Int(a), Value::Int(b)]) => Ok(Value::Int(if a < b { *a } else { *b })),
+        ("min", [Value::Float(a), Value::Float(b)]) => {
+            Ok(Value::Float(if a < b { *a } else { *b }))
+        }
+        ("max", [Value::Int(a), Value::Int(b)]) => Ok(Value::Int(if a > b { *a } else { *b })),
+        ("max", [Value::Float(a), Value::Float(b)]) => {
+            Ok(Value::Float(if a > b { *a } else { *b }))
+        }
+        ("sin", [Value::Float(x)]) => Ok(Value::Float(x.sin())),
+        ("cos", [Value::Float(x)]) => Ok(Value::Float(x.cos())),
+        ("tan", [Value::Float(x)]) => Ok(Value::Float(x.tan())),
+        ("exp", [Value::Float(x)]) => Ok(Value::Float(x.exp())),
+        ("log", [Value::Float(x)]) => Ok(Value::Float(x.ln())),
+        ("atan2", [Value::Float(y), Value::Float(x)]) => Ok(Value::Float(y.atan2(*x))),
+        ("pi", []) => Ok(Value::Float(std::f64::consts::PI)),
         _ => Err(RuntimeError::TypeError(format!("bad arguments to `{name}`"))),
     }
 }
