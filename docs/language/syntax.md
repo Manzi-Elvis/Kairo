@@ -751,3 +751,26 @@ from the argument type.
 - Integer `+ - * /` now wrap on overflow in the interpreter, matching
   native programs (it used to panic in debug builds).
 - An integer literal that doesn't fit in 64 bits is now a lexer error.
+
+
+---
+
+# Kairo v0.30: math functions
+
+| Function | Description |
+|---|---|
+| `sqrt(x)`, `floor(x)`, `ceil(x)`, `round(x)` | `Float` to `Float`. `round` rounds halves away from zero. `sqrt` of a negative number is `nan`. |
+| `pow(x, y)` | `x` raised to `y`, `Float` to `Float`. |
+| `abs(x)` | Absolute value of an `Int` or a `Float`. `abs` of the smallest `Int` wraps to itself. |
+| `min(a, b)`, `max(a, b)` | Smaller or larger of two `Int`s or two `Float`s (both the same type). For floats the result is unspecified when `nan` is involved. |
+| `sin(x)`, `cos(x)`, `tan(x)`, `exp(x)` | `Float` to `Float`, angles in radians. |
+| `log(x)` | Natural logarithm. |
+| `atan2(y, x)` | Angle of the point `(x, y)`, in radians. |
+| `pi()` | 3.141592653589793. A function because Kairo has no constants yet. |
+
+Use `toInt(floor(x))` to turn a rounded float into an `Int`.
+
+A function you define yourself with one of these names takes precedence
+over the standard-library one, so existing programs keep working.
+Native programs call the platform's C math library, as the interpreter
+does. On Linux and macOS, `kairo build` links it with `-lm`.
