@@ -59,6 +59,25 @@ pub const BUILTINS: &[Builtin] = &[
     Builtin { name: "deleteFile", params: &[BType::Str], ret: BType::Unit, c_symbol: "kairo_delete_file" },
     Builtin { name: "args", params: &[], ret: BType::StrArray, c_symbol: "kairo_args" },
     Builtin { name: "exit", params: &[BType::Int], ret: BType::Unit, c_symbol: "kairo_exit" },
+    // math
+    Builtin { name: "sqrt", params: &[BType::Float], ret: BType::Float, c_symbol: "kairo_sqrt" },
+    Builtin { name: "pow", params: &[BType::Float, BType::Float], ret: BType::Float, c_symbol: "kairo_pow" },
+    Builtin { name: "floor", params: &[BType::Float], ret: BType::Float, c_symbol: "kairo_floor" },
+    Builtin { name: "ceil", params: &[BType::Float], ret: BType::Float, c_symbol: "kairo_ceil" },
+    Builtin { name: "round", params: &[BType::Float], ret: BType::Float, c_symbol: "kairo_round" },
+    Builtin { name: "abs", params: &[BType::Int], ret: BType::Int, c_symbol: "kairo_abs_int" },
+    Builtin { name: "abs", params: &[BType::Float], ret: BType::Float, c_symbol: "kairo_abs_float" },
+    Builtin { name: "min", params: &[BType::Int, BType::Int], ret: BType::Int, c_symbol: "kairo_min_int" },
+    Builtin { name: "min", params: &[BType::Float, BType::Float], ret: BType::Float, c_symbol: "kairo_min_float" },
+    Builtin { name: "max", params: &[BType::Int, BType::Int], ret: BType::Int, c_symbol: "kairo_max_int" },
+    Builtin { name: "max", params: &[BType::Float, BType::Float], ret: BType::Float, c_symbol: "kairo_max_float" },
+    Builtin { name: "sin", params: &[BType::Float], ret: BType::Float, c_symbol: "kairo_sin" },
+    Builtin { name: "cos", params: &[BType::Float], ret: BType::Float, c_symbol: "kairo_cos" },
+    Builtin { name: "tan", params: &[BType::Float], ret: BType::Float, c_symbol: "kairo_tan" },
+    Builtin { name: "exp", params: &[BType::Float], ret: BType::Float, c_symbol: "kairo_exp" },
+    Builtin { name: "log", params: &[BType::Float], ret: BType::Float, c_symbol: "kairo_log" },
+    Builtin { name: "atan2", params: &[BType::Float, BType::Float], ret: BType::Float, c_symbol: "kairo_atan2" },
+    Builtin { name: "pi", params: &[], ret: BType::Float, c_symbol: "kairo_pi" },
 ];
 
 /// The first row with this name.
@@ -114,5 +133,16 @@ mod tests {
         assert_eq!(resolve("toInt", &[BType::Str]).unwrap().c_symbol, "kairo_to_int");
         assert_eq!(resolve("toInt", &[BType::Float]).unwrap().c_symbol, "kairo_float_to_int");
         assert!(resolve("toInt", &[BType::Bool]).is_none());
+    }
+
+    #[test]
+    fn resolves_math_overloads() {
+        assert_eq!(resolve("abs", &[BType::Int]).unwrap().c_symbol, "kairo_abs_int");
+        assert_eq!(resolve("abs", &[BType::Float]).unwrap().c_symbol, "kairo_abs_float");
+        assert_eq!(
+            resolve("max", &[BType::Float, BType::Float]).unwrap().c_symbol,
+            "kairo_max_float"
+        );
+        assert!(resolve("max", &[BType::Int, BType::Float]).is_none());
     }
 }
